@@ -33,38 +33,88 @@
 #include <string.h>
 #include <stdio.h>
 
+
 // Threads
 static THD_FUNCTION(focan_protocol_thread, arg);
 static THD_WORKING_AREA(focan_protocol_thread_wa, 1024);
 
+// Private functions
+static void terminalCallback(int argc, const char **argv);
+
+// processing function prototypes
+static void processByte(uint8_t data);
+static void interpreteRxData(void);
+static bool crcValid(void);
+static void sendResponse(void);
+
+
 // Private variables
 static volatile bool stop_now = true;
 static volatile bool is_running = false;
+static volatile bool enablePrintf = false;
+
 
 #define BREAKS_RELEASED_PORT	HW_ADC_EXT_GPIO
 #define BREAKS_RELEASED_PIN		HW_ADC_EXT_PIN
+static bool breaksEngaged;
 
 static SerialConfig uart_cfg = {
 	9600,
 	0,
-	USART_CR2_LINEN,
+	0,
 	0
 };
+
+static SerialDriver * TxSerialPortDriver = &HW_UART_DEV;
+static SerialDriver * RxSerialPortDriver = &HW_UART_DEV;
+static stm32_gpio_t * TxGpioPort = HW_UART_TX_PORT;
+static stm32_gpio_t * RxGpioPort = HW_UART_RX_PORT;
+static uint8_t TxGpioPin = HW_UART_TX_PIN;
+static uint8_t RxGpioPin = HW_UART_RX_PIN;
+static uint8_t gpioAF = HW_UART_GPIO_AF;
+
+
+#define TX_BUFFER_SIZE 14
+#define RX_BUFFER_SIZE 20
+static uint8_t TxBuffer[TX_BUFFER_SIZE];
+static uint8_t RxBuffer[RX_BUFFER_SIZE];
+static uint8_t RxIndex;
 
 
 // Called when the custom application is started. Start our
 // threads here and set up callbacks.
 void app_custom_start(void) {
 	stop_now = false;
-	palSetPadMode(BREAKS_RELEASED_PORT, BREAKS_RELEASED_PIN, PAL_MODE_INPUT_PULLUP);
+	RxIndex = 0;
+	breaksEngaged = true;
+
 	chThdCreateStatic(focan_protocol_thread_wa, sizeof(focan_protocol_thread_wa),
 			NORMALPRIO, focan_protocol_thread, NULL);
+
+	palSetPadMode(BREAKS_RELEASED_PORT, BREAKS_RELEASED_PIN, PAL_MODE_INPUT_PULLUP);
+
+	sdStart(TxSerialPortDriver, &uart_cfg);
+	sdStart(RxSerialPortDriver, &uart_cfg);
+	palSetPadMode(TxGpioPort, TxGpioPin, PAL_MODE_ALTERNATE(gpioAF) | PAL_STM32_OSPEED_HIGHEST | PAL_STM32_PUDR_PULLUP);
+	palSetPadMode(RxGpioPort, RxGpioPin, PAL_MODE_ALTERNATE(gpioAF) | PAL_STM32_OSPEED_HIGHEST | PAL_STM32_PUDR_PULLUP);
+	
+	terminal_register_command_callback(
+		"focan",
+		"toggle focan app terminal output",
+		NULL,
+		terminalCallback);
 }
 
 // Called when the custom application is stopped. Stop our threads
 // and release callbacks.
 void app_custom_stop(void) {
 	palSetPadMode(BREAKS_RELEASED_PORT, BREAKS_RELEASED_PIN, PAL_MODE_INPUT_ANALOG);
+
+	sdStop(RxSerialPortDriver);
+	sdStop(TxSerialPortDriver);
+	palSetPadMode(TxGpioPort, TxGpioPin, PAL_MODE_INPUT_PULLUP);
+	palSetPadMode(RxGpioPort, RxGpioPin, PAL_MODE_INPUT_PULLUP);
+	terminal_unregister_callback(terminalCallback);
 
 	stop_now = true;
 	while (is_running) {
@@ -81,27 +131,15 @@ static THD_FUNCTION(focan_protocol_thread, arg) {
 
 	chRegSetThreadName("App Focan");
 
-	is_running = true;
+	event_listener_t el;
+	chEvtRegisterMaskWithFlags(&(RxSerialPortDriver->event), &el, EVENT_MASK(0), CHN_INPUT_AVAILABLE);
 
-	// Example of using the experiment plot
-//	chThdSleepMilliseconds(8000);
-//	commands_init_plot("Sample", "Voltage");
-//	commands_plot_add_graph("Temp Fet");
-//	commands_plot_add_graph("Input Voltage");
-//	float samp = 0.0;
-//
-//	for(;;) {
-//		commands_plot_set_graph(0);
-//		commands_send_plot_points(samp, mc_interface_temp_fet_filtered());
-//		commands_plot_set_graph(1);
-//		commands_send_plot_points(samp, GET_INPUT_VOLTAGE());
-//		samp++;
-//		chThdSleepMilliseconds(10);
-//	}
+	is_running = true;
 
 	for(;;) {
 		// Check if it is time to stop.
 		if (stop_now) {
+			chEvtUnregister(&(RxSerialPortDriver->event), &el);
 			is_running = false;
 			return;
 		}
@@ -109,8 +147,133 @@ static THD_FUNCTION(focan_protocol_thread, arg) {
 		timeout_reset(); // Reset timeout if everything is OK.
 
 		// Run your logic here. A lot of functionality is available in mc_interface.h.
-		commands_printf("Break state: %s\n", palReadPad(BREAKS_RELEASED_PORT, BREAKS_RELEASED_PIN) ? "released" : "pulled");
+		breaksEngaged = !palReadPad(BREAKS_RELEASED_PORT, BREAKS_RELEASED_PIN);
+		//if (enablePrintf)
+		//commands_printf("Break state: %s", breaksEngaged ? "pulled" : "release");
 
-		chThdSleepMilliseconds(10);
+		chEvtWaitAnyTimeout(ALL_EVENTS, 1000);//ST2MS(10));
+		bool rx = true;
+		while (rx) {
+			msg_t res = sdGetTimeout(RxSerialPortDriver, TIME_IMMEDIATE);
+			if (res != MSG_TIMEOUT) {
+				processByte(res);
+				rx = true;
+			} else {
+				rx = false;
+			}
+		}
 	}
+}
+
+void processByte(uint8_t data) {
+	if (RxIndex >= RX_BUFFER_SIZE				// protect from overflow
+		|| (RxIndex == 0 && data != 0x01)		// first byte should be a 0x01
+		|| (RxIndex == 1 && data != 0x14)		// second byte should be a 0x14 (data frame length)
+		|| (RxIndex == 2 && data != 0x01)) {	// third byte should be a 0x01
+		RxIndex = 0;
+		if (enablePrintf)
+		commands_printf("ignored received byte - index reset");
+		return;
+	}
+
+	RxBuffer[RxIndex++] = data;
+
+	if (RxIndex >= RX_BUFFER_SIZE) {	// after receiving the last byte
+		if (enablePrintf)
+		commands_printf("received complete message: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+						RxBuffer[0], RxBuffer[1], RxBuffer[2], RxBuffer[3], RxBuffer[4],
+						RxBuffer[5], RxBuffer[6], RxBuffer[7], RxBuffer[8], RxBuffer[9],
+						RxBuffer[10], RxBuffer[11], RxBuffer[12], RxBuffer[13], RxBuffer[14],
+						RxBuffer[15], RxBuffer[16], RxBuffer[17], RxBuffer[18], RxBuffer[19]);
+		if (crcValid()) {
+			interpreteRxData();
+			sendResponse();
+		}
+		RxIndex = 0;
+	}
+}
+
+void interpreteRxData(void) {
+	// gear (0: off, 1: eco, 2: mid, 3: high)
+	uint8_t gear = RxBuffer[4] & 0x03;
+
+	// light enable bit
+	bool lightEn = (RxBuffer[5] & 0x20) != 0;
+
+	// wheel diameter in 1/10 inch (25...500)
+	uint16_t wheelDiameter = ((RxBuffer[7] & 0x01) << 8) + RxBuffer[8];
+
+	// speed lever position (0...1000)
+	uint16_t speedLever = ((RxBuffer[16] & 0x03) << 8) + RxBuffer[17];
+	mc_interface_set_duty(speedLever/1000.0);
+}
+
+// reveng.exe: width=8  poly=0x01  init=0x00  refin=false  refout=false  xorout=0x00  check=0x31  residue=0x00  name=(none)
+// see https://reveng.sourceforge.io/readme.htm
+uint8_t crc8calc(uint8_t *buffer, uint8_t len) {
+	uint8_t poly = 0x01;
+	uint8_t crc = 0;
+
+	for (size_t i=0; i<len; ++i) {
+		crc ^= buffer[i];
+		for (size_t j=0; j<8; ++j) {
+			if ((crc & 0x80) != 0) {
+				crc = (crc << 1) ^ poly;
+			} else {
+				crc <<= 1;
+			}
+		}
+	}
+	return crc;
+}
+
+bool crcValid(void) {
+	uint8_t crcReg = 0;
+	uint8_t crcReceived = RxBuffer[RX_BUFFER_SIZE-1];
+	
+	//crc8ProcessMessage(&crcReg, RxBuffer, RX_BUFFER_SIZE-1);
+	crcReg = crc8calc(RxBuffer, RX_BUFFER_SIZE-1);
+
+	if (enablePrintf)
+	commands_printf("Received CRC = %02X and calculated CRC = %02X (%s)",
+					crcReceived, crcReg, crcReceived == crcReg ? "valid" : "invalid");
+
+	return (crcReg == crcReceived);
+}
+
+void sendResponse(void) {
+	float rpm = mc_interface_get_rpm();
+	uint16_t msPerRev = rpm <= 0.0 ? 31456 : 60000.0/rpm;
+
+	TxBuffer[0] = 2;
+	TxBuffer[1] = 14;
+	TxBuffer[2] = 1;
+
+	TxBuffer[3] = 0;
+	TxBuffer[4] = 0;
+	TxBuffer[5] = 0;
+	TxBuffer[6] = 0;
+	TxBuffer[7] = 0;
+
+	// wheel speed in ms/rev 0...31456
+	TxBuffer[8] = msPerRev>>8;
+	TxBuffer[9] = msPerRev&0xFF;
+
+	TxBuffer[10] = 0;
+	TxBuffer[11] = 0;
+	TxBuffer[12] = 0;
+
+	TxBuffer[13] = crc8calc(TxBuffer, TX_BUFFER_SIZE-1);
+
+	if (enablePrintf)
+	commands_printf("responding with message: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+					RxBuffer[0], RxBuffer[1], RxBuffer[2], RxBuffer[3], RxBuffer[4],
+					RxBuffer[5], RxBuffer[6], RxBuffer[7], RxBuffer[8], RxBuffer[9],
+					RxBuffer[10], RxBuffer[11], RxBuffer[12], RxBuffer[13]);
+
+	sdWrite(TxSerialPortDriver, TxBuffer, TX_BUFFER_SIZE);
+}
+
+static void terminalCallback(int argc, const char **argv) {
+	enablePrintf = !enablePrintf;
 }
