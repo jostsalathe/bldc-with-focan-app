@@ -43,20 +43,28 @@ static void terminalCallback(int argc, const char **argv);
 
 // processing function prototypes
 static void processByte(uint8_t data);
+static void checkMsgTimeout(void);
 static void interpreteRxData(void);
 static bool crcValid(void);
 static void sendResponse(void);
+static void setErpmLimited(bool limited); // TODO
 
 
 // Private variables
-static volatile bool stop_now = true;
-static volatile bool is_running = false;
-static volatile bool enablePrintf = false;
+static volatile bool stop_now = TRUE;
+static volatile bool is_running = FALSE;
+static volatile bool enablePrintf = FALSE;
+#define MSG_TIMEOUT_MS 1100
+static volatile systime_t timeLastValidMessage;
 
 
 #define BREAKS_RELEASED_PORT	HW_ADC_EXT_GPIO
 #define BREAKS_RELEASED_PIN		HW_ADC_EXT_PIN
-static bool breaksEngaged;
+static bool breaksReleased;
+
+#define ERPM_LIMITED	6893.0	// 22 km/h
+#define ERPM_FREE		13158.0	// 42 km/h
+
 
 static SerialConfig uart_cfg = {
 	9600,
@@ -84,9 +92,9 @@ static uint8_t RxIndex;
 // Called when the custom application is started. Start our
 // threads here and set up callbacks.
 void app_custom_start(void) {
-	stop_now = false;
+	stop_now = FALSE;
 	RxIndex = 0;
-	breaksEngaged = true;
+	breaksReleased = FALSE;
 
 	chThdCreateStatic(focan_protocol_thread_wa, sizeof(focan_protocol_thread_wa),
 			NORMALPRIO, focan_protocol_thread, NULL);
@@ -116,7 +124,7 @@ void app_custom_stop(void) {
 	palSetPadMode(RxGpioPort, RxGpioPin, PAL_MODE_INPUT_PULLUP);
 	terminal_unregister_callback(terminalCallback);
 
-	stop_now = true;
+	stop_now = TRUE;
 	while (is_running) {
 		chThdSleepMilliseconds(1);
 	}
@@ -134,32 +142,39 @@ static THD_FUNCTION(focan_protocol_thread, arg) {
 	event_listener_t el;
 	chEvtRegisterMaskWithFlags(&(RxSerialPortDriver->event), &el, EVENT_MASK(0), CHN_INPUT_AVAILABLE);
 
-	is_running = true;
+	timeLastValidMessage = chVTGetSystemTime();
+
+	setErpmLimited(FALSE);
+	setErpmLimited(TRUE);
+
+	is_running = TRUE;
 
 	for(;;) {
 		// Check if it is time to stop.
 		if (stop_now) {
 			chEvtUnregister(&(RxSerialPortDriver->event), &el);
-			is_running = false;
+			is_running = FALSE;
 			return;
 		}
 
 		timeout_reset(); // Reset timeout if everything is OK.
 
 		// Run your logic here. A lot of functionality is available in mc_interface.h.
-		breaksEngaged = !palReadPad(BREAKS_RELEASED_PORT, BREAKS_RELEASED_PIN);
+		breaksReleased = palReadPad(BREAKS_RELEASED_PORT, BREAKS_RELEASED_PIN);
 		//if (enablePrintf)
-		//commands_printf("Break state: %s", breaksEngaged ? "pulled" : "release");
+		//commands_printf("Break state: %s", breaksReleased ? "pulled" : "release");
 
-		chEvtWaitAnyTimeout(ALL_EVENTS, 1000);//ST2MS(10));
-		bool rx = true;
+		checkMsgTimeout();
+
+		chEvtWaitAnyTimeout(ALL_EVENTS, 100);
+		bool rx = TRUE;
 		while (rx) {
 			msg_t res = sdGetTimeout(RxSerialPortDriver, TIME_IMMEDIATE);
 			if (res != MSG_TIMEOUT) {
 				processByte(res);
-				rx = true;
+				rx = TRUE;
 			} else {
-				rx = false;
+				rx = FALSE;
 			}
 		}
 	}
@@ -186,6 +201,7 @@ void processByte(uint8_t data) {
 						RxBuffer[10], RxBuffer[11], RxBuffer[12], RxBuffer[13], RxBuffer[14],
 						RxBuffer[15], RxBuffer[16], RxBuffer[17], RxBuffer[18], RxBuffer[19]);
 		if (crcValid()) {
+			timeLastValidMessage = chVTGetSystemTime();
 			interpreteRxData();
 			sendResponse();
 		}
@@ -193,22 +209,46 @@ void processByte(uint8_t data) {
 	}
 }
 
+static void checkMsgTimeout(void) {
+	if (chVTTimeElapsedSinceX(timeLastValidMessage) > MS2ST(MSG_TIMEOUT_MS)) {
+		// shut off motor
+		mc_interface_set_current_rel(0);
+
+		// reset timeout
+		timeLastValidMessage = chVTGetSystemTime();
+		
+		// reset RX algorithm
+		RxIndex = 0;
+
+		// report timeout occurrence
+		if (enablePrintf)
+		commands_printf("%6d TIMEOUT detected! Shutting off motor.", ST2MS(chVTGetSystemTime()));
+	}
+}
+
 void interpreteRxData(void) {
 	// gear (0: off, 1: eco, 2: mid, 3: high)
-	uint8_t gear = RxBuffer[4] & 0x03;
+	// uint8_t gear = RxBuffer[4] & 0x03;
 
 	// light enable bit
 	bool lightEn = (RxBuffer[5] & 0x20) != 0;
+	setErpmLimited(!lightEn);
 
 	// wheel diameter in 1/10 inch (25...500)
-	uint16_t wheelDiameter = ((RxBuffer[7] & 0x01) << 8) + RxBuffer[8];
+	// uint16_t wheelDiameter = ((RxBuffer[7] & 0x01) << 8) + RxBuffer[8];
 
-	// speed lever position (0...1000)
+	// speed lever position (400...1000)
 	uint16_t speedLever = ((RxBuffer[16] & 0x03) << 8) + RxBuffer[17];
-	mc_interface_set_duty(speedLever/1000.0);
+	if (enablePrintf)
+	commands_printf("%6d %1d %04d", ST2MS(chVTGetSystemTime()), breaksReleased, speedLever);
+	if (breaksReleased && speedLever >= 400) {
+		mc_interface_set_current_rel((speedLever - 400) / 600.0);
+	} else {
+		mc_interface_set_current_rel(0);
+	}
 }
 
-// reveng.exe: width=8  poly=0x01  init=0x00  refin=false  refout=false  xorout=0x00  check=0x31  residue=0x00  name=(none)
+// reveng.exe: width=8  poly=0x01  init=0x00  refin=FALSE  refout=FALSE  xorout=0x00  check=0x31  residue=0x00  name=(none)
 // see https://reveng.sourceforge.io/readme.htm
 uint8_t crc8calc(uint8_t *buffer, uint8_t len) {
 	uint8_t poly = 0x01;
@@ -242,8 +282,8 @@ bool crcValid(void) {
 }
 
 void sendResponse(void) {
-	float rpm = mc_interface_get_rpm();
-	uint16_t msPerRev = rpm <= 0.0 ? 31456 : 60000.0/rpm;
+	float rpm = mc_interface_get_rpm()/15; // divided by motor pole pairs
+	uint16_t msPerRev = rpm <= 2.0 ? 31456 : 60000.0/rpm;
 
 	TxBuffer[0] = 2;
 	TxBuffer[1] = 14;
@@ -272,6 +312,18 @@ void sendResponse(void) {
 					RxBuffer[10], RxBuffer[11], RxBuffer[12], RxBuffer[13]);
 
 	sdWrite(TxSerialPortDriver, TxBuffer, TX_BUFFER_SIZE);
+}
+
+static void setErpmLimited(bool limited) {
+	static bool currentlyLimited = true;
+	if (limited != currentlyLimited) {
+		float newErpm = limited ? ERPM_LIMITED : ERPM_FREE;
+		// TODO see comm/commands.c > commands_process_packet() case COMM_SET_MCCONF
+		if (enablePrintf)
+		commands_printf("Updated ERPM to %d (%slimited) (TODO not actually)", (int32_t) newErpm, limited ? "" : "un");
+
+		currentlyLimited = limited;
+	}
 }
 
 static void terminalCallback(int argc, const char **argv) {
