@@ -17,12 +17,15 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#pragma GCC push_options
+#pragma GCC optimize ("Os")
+
 #include "commands.h"
 #include "ch.h"
 #include "hal.h"
 #include "mc_interface.h"
 #include "stm32f4xx_conf.h"
-#include "servo_simple.h"
+#include "pwm_servo.h"
 #include "buffer.h"
 #include "terminal.h"
 #include "hw.h"
@@ -38,7 +41,6 @@
 #include "packet.h"
 #include "encoder/encoder.h"
 #include "nrf_driver.h"
-#include "gpdrive.h"
 #include "confgenerator.h"
 #include "imu.h"
 #include "shutdown.h"
@@ -286,6 +288,8 @@ void commands_process_packet(unsigned char *data, unsigned int len,
 		strcpy((char*)(send_buffer + ind), FW_NAME);
 		ind += strlen(FW_NAME) + 1;
 
+		buffer_append_uint32(send_buffer, main_calc_hw_crc(), &ind);
+
 		fw_version_sent_cnt++;
 
 		reply_func(send_buffer, ind);
@@ -530,13 +534,14 @@ void commands_process_packet(unsigned char *data, unsigned int len,
 
 	case COMM_SET_SERVO_POS: {
 		int32_t ind = 0;
-		servo_simple_set_output(buffer_get_float16(data, 1000.0, &ind));
+		pwm_servo_set_servo_out(buffer_get_float16(data, 1000.0, &ind));
 	} break;
 
 	case COMM_SET_MCCONF: {
 #ifndef	HW_MCCONF_READ_ONLY
 		mc_configuration *mcconf = mempools_alloc_mcconf();
-		*mcconf = *mc_interface_get_configuration();
+		volatile const mc_configuration *mcconf_old = mc_interface_get_configuration();
+		*mcconf = *mcconf_old;
 
 		if (confgenerator_deserialize_mcconf(data, mcconf)) {
 			utils_truncate_number(&mcconf->l_current_max_scale , 0.0, 1.0);
@@ -550,6 +555,21 @@ void commands_process_packet(unsigned char *data, unsigned int len,
 			mcconf->lo_current_min = mcconf->l_current_min * mcconf->l_current_min_scale;
 			mcconf->lo_in_current_max = mcconf->l_in_current_max;
 			mcconf->lo_in_current_min = mcconf->l_in_current_min;
+
+			// Keep old offsets if writing offsets is disabled
+			if (!(mcconf->foc_offsets_cal_mode & (1 << 1))) {
+				mcconf->foc_offsets_current[0] = mcconf_old->foc_offsets_current[0];
+				mcconf->foc_offsets_current[1] = mcconf_old->foc_offsets_current[1];
+				mcconf->foc_offsets_current[2] = mcconf_old->foc_offsets_current[2];
+
+				mcconf->foc_offsets_voltage[0] = mcconf_old->foc_offsets_voltage[0];
+				mcconf->foc_offsets_voltage[1] = mcconf_old->foc_offsets_voltage[1];
+				mcconf->foc_offsets_voltage[2] = mcconf_old->foc_offsets_voltage[2];
+
+				mcconf->foc_offsets_voltage_undriven[0] = mcconf_old->foc_offsets_voltage_undriven[0];
+				mcconf->foc_offsets_voltage_undriven[1] = mcconf_old->foc_offsets_voltage_undriven[1];
+				mcconf->foc_offsets_voltage_undriven[2] = mcconf_old->foc_offsets_voltage_undriven[2];
+			}
 
 			commands_apply_mcconf_hw_limits(mcconf);
 			conf_general_store_mc_configuration(mcconf, mc_interface_get_motor_thread() == 2);
@@ -770,61 +790,6 @@ void commands_process_packet(unsigned char *data, unsigned int len,
 		send_buffer[ind++] = packet_id;
 		send_buffer[ind++] = NRF_PAIR_STARTED;
 		reply_func(send_buffer, ind);
-	} break;
-
-	case COMM_GPD_SET_FSW: {
-		timeout_reset();
-		int32_t ind = 0;
-		gpdrive_set_switching_frequency((float)buffer_get_int32(data, &ind));
-	} break;
-
-	case COMM_GPD_BUFFER_SIZE_LEFT: {
-		int32_t ind = 0;
-		uint8_t send_buffer[50];
-		send_buffer[ind++] = COMM_GPD_BUFFER_SIZE_LEFT;
-		buffer_append_int32(send_buffer, gpdrive_buffer_size_left(), &ind);
-		reply_func(send_buffer, ind);
-	} break;
-
-	case COMM_GPD_FILL_BUFFER: {
-		timeout_reset();
-		int32_t ind = 0;
-		while (ind < (int)len) {
-			gpdrive_add_buffer_sample(buffer_get_float32_auto(data, &ind));
-		}
-	} break;
-
-	case COMM_GPD_OUTPUT_SAMPLE: {
-		timeout_reset();
-		int32_t ind = 0;
-		gpdrive_output_sample(buffer_get_float32_auto(data, &ind));
-	} break;
-
-	case COMM_GPD_SET_MODE: {
-		timeout_reset();
-		int32_t ind = 0;
-		gpdrive_set_mode(data[ind++]);
-	} break;
-
-	case COMM_GPD_FILL_BUFFER_INT8: {
-		timeout_reset();
-		int32_t ind = 0;
-		while (ind < (int)len) {
-			gpdrive_add_buffer_sample_int((int8_t)data[ind++]);
-		}
-	} break;
-
-	case COMM_GPD_FILL_BUFFER_INT16: {
-		timeout_reset();
-		int32_t ind = 0;
-		while (ind < (int)len) {
-			gpdrive_add_buffer_sample_int(buffer_get_int16(data, &ind));
-		}
-	} break;
-
-	case COMM_GPD_SET_BUFFER_INT_SCALE: {
-		int32_t ind = 0;
-		gpdrive_set_buffer_int_scale(buffer_get_float32_auto(data, &ind));
 	} break;
 
 	case COMM_GET_VALUES_SETUP:
@@ -1442,7 +1407,8 @@ void commands_process_packet(unsigned char *data, unsigned int len,
 
 #ifdef USE_LISPBM
 		if (packet_id == COMM_LISP_ERASE_CODE) {
-			lispif_restart(false, false);
+			lispif_restart(false, false, false);
+			flash_helper_erase_code(CODE_IND_LISP_CONST);
 		}
 #endif
 
@@ -1621,6 +1587,26 @@ void commands_process_packet(unsigned char *data, unsigned int len,
 		conf_custom_process_cmd(data - 1, len + 1, reply_func);
 	} break;
 
+
+	case COMM_SHUTDOWN: {
+		int ind = 0;
+		int force = data[ind++];
+		if ((fabsf(mc_interface_get_rpm()) > 100) && (force != 1)) {
+			// Don't allow shutdown/restart while riding, unless force == 1
+			break;
+		}
+
+		int is_restart = data[ind++];
+		if (is_restart == 1) {
+			// same as terminal rebootwdt command
+			chSysLock();
+			for (;;) {__NOP();}
+		}
+		else {
+			do_shutdown(false);
+		}
+	} break;
+
 	// Blocking commands. Only one of them runs at any given time, in their
 	// own thread. If other blocking commands come before the previous one has
 	// finished, they are discarded.
@@ -1689,10 +1675,41 @@ int commands_printf_lisp(const char* format, ...) {
 	int len;
 
 	print_buffer[0] = COMM_LISP_PRINT;
-	len = vsnprintf(print_buffer + 1, (PRINT_BUFFER_SIZE - 1), format, arg);
-	va_end (arg);
+	int offset = 1;
+	size_t prefix_len = sprintf(print_buffer + offset, lispif_print_prefix(), "%s");
+	offset += prefix_len;
 
-	int len_to_print = (len < (PRINT_BUFFER_SIZE - 1)) ? len + 1 : PRINT_BUFFER_SIZE;
+	len = vsnprintf(
+		print_buffer + offset, (PRINT_BUFFER_SIZE - offset), format, arg
+	);
+	va_end(arg);
+
+	int len_to_print = (len < (PRINT_BUFFER_SIZE - offset)) ? len + offset : PRINT_BUFFER_SIZE;
+	
+	for (size_t i = 2; i < (size_t)len_to_print; i++) {
+		// TODO: Handle newline character in prefix?
+		char chr = print_buffer[i - 1];
+		if (chr == '\0') {
+			break;
+		}
+		if (chr == '\n') {
+			int remaining_len = len_to_print - i;
+			if (remaining_len > (int)(PRINT_BUFFER_SIZE - i - prefix_len)) {
+				remaining_len = PRINT_BUFFER_SIZE - i - prefix_len;
+			}
+			if (remaining_len <= 0) {
+				break;
+			}
+			memmove(print_buffer + i + prefix_len, print_buffer + i, remaining_len);
+			memmove(print_buffer + i, lispif_print_prefix(), prefix_len);
+			i += prefix_len;
+			len_to_print += prefix_len;
+		}
+		
+		if (len_to_print > PRINT_BUFFER_SIZE) {
+			len_to_print = PRINT_BUFFER_SIZE;
+		}
+	}
 
 	if (len > 0) {
 		if (print_buffer[len_to_print - 1] == '\n') {
@@ -1870,6 +1887,7 @@ void commands_apply_mcconf_hw_limits(mc_configuration *mcconf) {
 #ifdef HW_LIM_CURRENT
 	utils_truncate_number(&mcconf->l_current_max, HW_LIM_CURRENT);
 	utils_truncate_number(&mcconf->l_current_min, HW_LIM_CURRENT);
+	utils_truncate_number(&mcconf->foc_hfi_amb_current, HW_LIM_CURRENT);
 #endif
 #ifdef HW_LIM_CURRENT_IN
 	utils_truncate_number(&mcconf->l_in_current_max, HW_LIM_CURRENT_IN);
@@ -2409,3 +2427,5 @@ static THD_FUNCTION(blocking_thread, arg) {
 		}
 	}
 }
+
+#pragma GCC pop_options

@@ -35,6 +35,7 @@ typedef struct {
 	float mod_alpha_raw;
 	float mod_beta_raw;
 	float id_target;
+	bool id_override_hfi;
 	float iq_target;
 	float max_duty;
 	float duty_now;
@@ -85,6 +86,7 @@ typedef struct {
 	float sign_last_sample;
 	float cos_last, sin_last;
 	float prev_sample;
+	float prev_sample_d;
 	float angle;
 	float double_integrator;
 	int est_done_cnt;
@@ -99,6 +101,39 @@ typedef struct {
 	float i_alpha_last;
 	float i_beta_last;
 } observer_state;
+
+#define MC_AUDIO_CHANNELS	4
+
+typedef enum {
+	MC_AUDIO_OFF = 0,
+	MC_AUDIO_TABLE,
+	MC_AUDIO_SAMPLED,
+} mc_audio_mode;
+
+typedef struct {
+	mc_audio_mode mode;
+
+	const float *table[MC_AUDIO_CHANNELS];
+	int table_len[MC_AUDIO_CHANNELS];
+	float table_voltage[MC_AUDIO_CHANNELS];
+	float table_freq[MC_AUDIO_CHANNELS];
+	float table_pos[MC_AUDIO_CHANNELS];
+
+	// Double-buffered sampled audio
+	const int8_t *sample_table[2];
+	int sample_table_len[2];
+	bool sample_table_filled[2];
+	int sample_table_now;
+	float sample_freq;
+	float sample_pos;
+	float sample_voltage;
+} mc_audio_state;
+
+typedef enum {
+	FOC_PWM_DISABLED = 0,
+	FOC_PWM_ENABLED,
+	FOC_PWM_FULL_BRAKE
+} foc_pwm_mode;
 
 typedef struct {
 	mc_configuration *m_conf;
@@ -116,7 +151,7 @@ typedef struct {
 	float m_current_off_delay;
 	float m_openloop_speed;
 	float m_openloop_phase;
-	bool m_output_on;
+	foc_pwm_mode m_pwm_mode;
 	float m_pos_pid_set;
 	float m_speed_pid_set_rpm;
 	float m_speed_command_rpm;
@@ -149,6 +184,9 @@ typedef struct {
 	hfi_state_t m_hfi;
 	int m_hfi_plot_en;
 	float m_hfi_plot_sample;
+
+	// Audio Modulation
+	mc_audio_state m_audio;
 
 	// For braking
 	float m_br_speed_before;
@@ -213,7 +251,7 @@ void foc_pll_run(float phase, float dt, float *phase_var,
 void foc_svm(float alpha, float beta, uint32_t PWMFullDutyCycle,
 		uint32_t* tAout, uint32_t* tBout, uint32_t* tCout, uint32_t *svm_sector);
 void foc_run_pid_control_pos(bool index_found, float dt, motor_all_state_t *motor);
-void foc_run_pid_control_speed(float dt, motor_all_state_t *motor);
+void foc_run_pid_control_speed(bool index_found, float dt, motor_all_state_t *motor);
 float foc_correct_encoder(float obs_angle, float enc_angle, float speed, float sl_erpm, motor_all_state_t *motor);
 float foc_correct_hall(float angle, float dt, motor_all_state_t *motor, int hall_val);
 void foc_run_fw(motor_all_state_t *motor, float dt);

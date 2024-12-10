@@ -18,6 +18,9 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#pragma GCC push_options
+#pragma GCC optimize ("Os")
+
 #include "lispif.h"
 #include "commands.h"
 #include "terminal.h"
@@ -38,17 +41,16 @@
 #define LISP_MEM_BITMAP_SIZE		LBM_MEMORY_BITMAP_SIZE_18K
 #define GC_STACK_SIZE				160
 #define PRINT_STACK_SIZE			128
-#define EXTENSION_STORAGE_SIZE		280
-#define VARIABLE_STORAGE_SIZE		50
+#ifndef EXTENSION_STORAGE_SIZE
+	#define EXTENSION_STORAGE_SIZE		298
+#endif
 #define EXT_LOAD_CALLBACK_LEN		20
 #define PROF_DATA_NUM				30
 
 __attribute__((section(".ram4"))) static lbm_cons_t heap[HEAP_SIZE] __attribute__ ((aligned (8)));
 static uint32_t memory_array[LISP_MEM_SIZE];
 __attribute__((section(".ram4"))) static uint32_t bitmap_array[LISP_MEM_BITMAP_SIZE];
-__attribute__((section(".ram4"))) static uint32_t print_stack_storage[PRINT_STACK_SIZE];
-__attribute__((section(".ram4"))) static extension_fptr extension_storage[EXTENSION_STORAGE_SIZE];
-__attribute__((section(".ram4"))) static lbm_value variable_storage[VARIABLE_STORAGE_SIZE];
+__attribute__((section(".ram4"))) static lbm_extension_t extension_storage[EXTENSION_STORAGE_SIZE];
 __attribute__((section(".ram4"))) static lbm_prof_t prof_data[PROF_DATA_NUM];
 static volatile bool prof_running = false;
 
@@ -56,9 +58,11 @@ static lbm_string_channel_state_t string_tok_state;
 static lbm_char_channel_t string_tok;
 static lbm_buffered_channel_state_t buffered_tok_state;
 static lbm_char_channel_t buffered_string_tok;
+static bool string_tok_valid = false;
 
 static lbm_const_heap_t const_heap;
 static lbm_uint *const_heap_ptr = 0;
+static lbm_uint const_heap_max_ind = 0;
 
 static thread_t *eval_tp = 0;
 static THD_FUNCTION(eval_thread, arg);
@@ -85,7 +89,7 @@ void lispif_init(void) {
 	// was the cause of it.
 	// TODO: Anything else to check?
 	if (!timeout_had_IWDG_reset() && terminal_get_first_fault() != FAULT_CODE_BOOTING_FROM_WATCHDOG_RESET) {
-		lispif_restart(false, true);
+		lispif_restart(false, true, true);
 	}
 
 	lbm_set_eval_step_quota(50);
@@ -115,17 +119,23 @@ static void print_ctx_info(eval_context_t *ctx, void *arg1, void *arg2) {
 
 	commands_printf_lisp("--------------------------------");
 	commands_printf_lisp("ContextID: %u", ctx->id);
-	commands_printf_lisp("Stack SP: %u",  ctx->K.sp);
-	commands_printf_lisp("Stack SP max: %u", ctx->K.max_sp);
-	if (print_ret) {
-		commands_printf_lisp("Value: %s", output);
-	} else {
-		commands_printf_lisp("Error: %s", output);
+
+	if (ctx->name) {
+		commands_printf_lisp("Context Name: %s", ctx->name);
 	}
+
+	commands_printf_lisp("Stack SP: %u",  ctx->K.sp);
+	commands_printf_lisp("Stack SP max: %u", lbm_get_max_stack(&ctx->K));
+	commands_printf_lisp("Result%s: %s", print_ret ? "" : " (trunc)", output);
 }
 
 static void sym_it(const char *str) {
-	commands_printf_lisp("%s", str);
+	bool sym_name_flash = lbm_symbol_in_flash((char *)str);
+	bool sym_entry_flash = lbm_symbol_list_entry_in_flash((char *)str);
+	commands_printf_lisp("[Name: %s, Entry: %s]: %s\n",
+			sym_name_flash ? "FLASH" : "L_MEM",
+					sym_entry_flash ? "FLASH" : "L_MEM",
+							str);
 }
 
 static void prof_thd_wrapper(void *v) {
@@ -135,6 +145,23 @@ static void prof_thd_wrapper(void *v) {
 		lbm_prof_sample();
 		chThdSleepMicroseconds(200);
 	}
+}
+
+static bool pause_eval(uint32_t num_free, uint32_t timeout_ms) {
+	int timeout_cnt = timeout_ms;
+
+	if (num_free > 0) {
+		lbm_pause_eval_with_gc(num_free);
+	} else {
+		lbm_pause_eval();
+	}
+
+	while (lbm_get_eval_state() != EVAL_CPS_STATE_PAUSED && timeout_cnt > 0) {
+		chThdSleepMilliseconds(1);
+		timeout_cnt--;
+	}
+
+	return timeout_cnt > 0;
 }
 
 void lispif_process_cmd(unsigned char *data, unsigned int len,
@@ -152,15 +179,9 @@ void lispif_process_cmd(unsigned char *data, unsigned int len,
 		lispif_disable_all_events();
 
 		if (!running) {
-			int timeout_cnt = 2000;
-			lbm_pause_eval();
-			while (lbm_get_eval_state() != EVAL_CPS_STATE_PAUSED && timeout_cnt > 0) {
-				chThdSleepMilliseconds(1);
-				timeout_cnt--;
-			}
-			ok = timeout_cnt > 0;
+			ok = pause_eval(0, 2000);
 		} else {
-			ok = lispif_restart(true, true);
+			ok = lispif_restart(true, true, true);
 		}
 
 		int32_t ind = 0;
@@ -185,6 +206,11 @@ void lispif_process_cmd(unsigned char *data, unsigned int len,
 			break;
 		}
 
+		bool print_all = true;
+		if (len > 0) {
+			print_all = data[0];
+		}
+
 		if (lbm_heap_state.gc_num > 0) {
 			heap_use = 100.0 * (float)(HEAP_SIZE - lbm_heap_state.gc_last_free) / (float)HEAP_SIZE;
 		}
@@ -205,36 +231,38 @@ void lispif_process_cmd(unsigned char *data, unsigned int len,
 		// Result. Currently unused
 		send_buffer_global[ind++] = '\0';
 
-		lbm_value curr = *lbm_get_env_ptr();
-		while (lbm_type_of(curr) == LBM_TYPE_CONS) {
-			lbm_value key_val = lbm_car(curr);
-			if (lbm_type_of(lbm_car(key_val)) == LBM_TYPE_SYMBOL && lbm_is_number(lbm_cdr(key_val))) {
-				const char *name = lbm_get_name_by_symbol(lbm_dec_sym(lbm_car(key_val)));
-				strcpy((char*)(send_buffer_global + ind), name);
-				ind += strlen(name) + 1;
-				buffer_append_float32_auto(send_buffer_global, lbm_dec_as_float(lbm_cdr(key_val)), &ind);
-			}
-
-			if (ind > 300) {
-				break;
-			}
-
-			curr = lbm_cdr(curr);
-		}
-
-		for (int i = 0; i < lbm_get_num_variables(); i ++) {
-			const char *name = lbm_get_variable_name_by_index(i);
-			const lbm_value var = lbm_get_variable_by_index(i);
-			if (lbm_is_number(var) && name) {
-				strcpy((char*)(send_buffer_global + ind), name);
-				ind += strlen(name) + 1;
-				buffer_append_float32_auto(send_buffer_global, lbm_dec_as_float(var), &ind);
-
+		if (pause_eval(0, 2000)) {
+			lbm_value *glob_env = lbm_get_global_env();
+			for (int i = 0; i < GLOBAL_ENV_ROOTS; i ++) {
 				if (ind > 300) {
 					break;
 				}
+
+				lbm_value curr = glob_env[i];
+				while (lbm_type_of(curr) == LBM_TYPE_CONS) {
+					lbm_value key_val = lbm_car(curr);
+					if (lbm_type_of(lbm_car(key_val)) == LBM_TYPE_SYMBOL && lbm_is_number(lbm_cdr(key_val))) {
+						const char *name = lbm_get_name_by_symbol(lbm_dec_sym(lbm_car(key_val)));
+
+						if (print_all ||
+								((name[0] == 'v' || name[0] == 'V') &&
+										(name[1] == 't' || name[1] == 'T'))) {
+							strcpy((char*)(send_buffer_global + ind), name);
+							ind += strlen(name) + 1;
+							buffer_append_float32_auto(send_buffer_global, lbm_dec_as_float(lbm_cdr(key_val)), &ind);
+						}
+					}
+
+					if (ind > 300) {
+						break;
+					}
+
+					curr = lbm_cdr(curr);
+				}
 			}
 		}
+
+		lbm_continue_eval();
 
 		reply_func(send_buffer_global, ind);
 		mempools_free_packet_buffer(send_buffer_global);
@@ -246,7 +274,7 @@ void lispif_process_cmd(unsigned char *data, unsigned int len,
 		}
 
 		if (!lisp_thd_running) {
-			lispif_restart(true, false);
+			lispif_restart(true, false, true);
 		}
 
 		if (lisp_thd_running) {
@@ -308,10 +336,11 @@ void lispif_process_cmd(unsigned char *data, unsigned int len,
 				commands_printf_lisp("Recovered: %d\n", lbm_heap_state.gc_recovered);
 				commands_printf_lisp("Recovered arrays: %u\n", lbm_heap_state.gc_recovered_arrays);
 				commands_printf_lisp("Marked: %d\n", lbm_heap_state.gc_marked);
-				commands_printf_lisp("GC SP max: %u (size %u)\n", lbm_heap_state.gc_stack.max_sp, lbm_heap_state.gc_stack.size);
+				commands_printf_lisp("GC SP max: %u (size %u)\n", lbm_get_max_stack(&lbm_heap_state.gc_stack), lbm_heap_state.gc_stack.size);
 				commands_printf_lisp("--(Symbol and Array memory)--\n");
-				commands_printf_lisp("Memory size: %u Words\n", lbm_memory_num_words());
-				commands_printf_lisp("Memory free: %u Words\n", lbm_memory_num_free());
+				commands_printf_lisp("Memory size: %u bytes\n", lbm_memory_num_words() * 4);
+				commands_printf_lisp("Memory free: %u bytes\n", lbm_memory_num_free() * 4);
+				commands_printf_lisp("Longest block free: %u bytes\n", lbm_memory_longest_free() * 4);
 				commands_printf_lisp("Allocated arrays: %u\n", lbm_heap_state.num_alloc_arrays);
 				commands_printf_lisp("Symbol table size: %u Bytes\n", lbm_get_symbol_table_size());
 				commands_printf_lisp("Symbol table size flash: %u Bytes\n", lbm_get_symbol_table_size_flash());
@@ -360,21 +389,18 @@ void lispif_process_cmd(unsigned char *data, unsigned int len,
 				commands_printf_lisp("Sleep:\t%u\t%f%%\n", num_sleep, (double)(100.0 * ((float)num_sleep / (float)tot_samples)));
 				commands_printf_lisp("Total:\t%u samples\n", tot_samples);
 			} else if (strncmp(str, ":env", 4) == 0) {
-				lbm_value curr = *lbm_get_env_ptr();
-				char output[128];
+				if (pause_eval(0, 1000)) {
+					lbm_value *glob_env = lbm_get_global_env();
+					char output[128];
+					for (int i = 0; i < GLOBAL_ENV_ROOTS; i ++) {
+						lbm_value curr = glob_env[i];
+						while (lbm_type_of(curr) == LBM_TYPE_CONS) {
+							lbm_print_value(output, sizeof(output), lbm_car(curr));
+							curr = lbm_cdr(curr);
 
-				commands_printf_lisp("Environment:\n");
-				while (lbm_type_of(curr) == LBM_TYPE_CONS) {
-					lbm_print_value(output, sizeof(output), lbm_car(curr));
-					curr = lbm_cdr(curr);
-					commands_printf_lisp("  %s", output);
-				}
-
-				commands_printf_lisp("Variables:");
-				for (int i = 0; i < lbm_get_num_variables(); i ++) {
-					const char *name = lbm_get_variable_name_by_index(i);
-					lbm_print_value(output, sizeof(output), lbm_get_variable_by_index(i));
-					commands_printf_lisp("  %s = %s", name ? name : "error", output);
+							commands_printf_lisp("  %s", output);
+						}
+					}
 				}
 			} else if (strncmp(str, ":ctxs", 5) == 0) {
 				commands_printf_lisp("****** Running contexts ******");
@@ -382,30 +408,26 @@ void lispif_process_cmd(unsigned char *data, unsigned int len,
 				commands_printf_lisp("****** Blocked contexts ******");
 				lbm_blocked_iterator(print_ctx_info, NULL, NULL);
 			} else if (strncmp(str, ":symbols", 8) == 0) {
-				lbm_symrepr_name_iterator(sym_it);
-				commands_printf_lisp(" ");
+				if (pause_eval(0, 1000)) {
+					lbm_symrepr_name_iterator(sym_it);
+					commands_printf_lisp(" ");
+				}
 			} else if (strncmp(str, ":reset", 6) == 0) {
-				commands_printf_lisp(lispif_restart(false, flash_helper_code_size(CODE_IND_LISP) > 0) ?
+				commands_printf_lisp(lispif_restart(false, flash_helper_code_size(CODE_IND_LISP) > 0, true) ?
 						"Reset OK\n\n" : "Reset Failed\n\n");
 			} else if (strncmp(str, ":pause", 6) == 0) {
-				lbm_pause_eval_with_gc(30);
-				while (lbm_get_eval_state() != EVAL_CPS_STATE_PAUSED) {
-					lbm_pause_eval();
-					sleep_callback(1);
+				if (pause_eval(30, 1000)) {
+					commands_printf_lisp("Evaluator paused\n");
 				}
-				commands_printf_lisp("Evaluator paused\n");
 			} else if (strncmp(str, ":continue", 9) == 0) {
 				lbm_continue_eval();
 			} else if (strncmp(str, ":undef", 6) == 0) {
-				lbm_pause_eval();
-				while(lbm_get_eval_state() != EVAL_CPS_STATE_PAUSED) {
-					lbm_pause_eval();
-					sleep_callback(1);
+				if (pause_eval(30, 1000)) {
+					char *sym = str + 7;
+					commands_printf_lisp("undefining: %s", sym);
+					commands_printf_lisp("%s", lbm_undefine(sym) ? "Cleared bindings" : "No definition found");
+					lbm_continue_eval();
 				}
-				char *sym = str + 7;
-				commands_printf_lisp("undefining: %s", sym);
-				commands_printf_lisp("%s", lbm_undefine(sym) ? "Cleared bindings" : "No definition found");
-				lbm_continue_eval();
 			} else if (strncmp(str, ":verb", 5) == 0) {
 				static bool verbose_now = false;
 				verbose_now = !verbose_now;
@@ -413,19 +435,11 @@ void lispif_process_cmd(unsigned char *data, unsigned int len,
 				commands_printf_lisp("Verbose errors %s", verbose_now ? "Enabled" : "Disabled");
 			} else {
 				if (repl_buffer) {
+					lispif_unlock_lbm();
 					break;
 				}
 
-				bool ok = true;
-				int timeout_cnt = 1000;
-				lbm_pause_eval_with_gc(30);
-				while (lbm_get_eval_state() != EVAL_CPS_STATE_PAUSED && timeout_cnt > 0) {
-					chThdSleep(5);
-					timeout_cnt--;
-				}
-				ok = timeout_cnt > 0;
-
-				if (ok) {
+				if (pause_eval(30, 1000)) {
 					repl_buffer = lbm_malloc_reserve(len);
 					if (repl_buffer) {
 						memcpy(repl_buffer, data, len);
@@ -458,20 +472,16 @@ void lispif_process_cmd(unsigned char *data, unsigned int len,
 		int32_t tot_len = buffer_get_int32(data, &ind);
 		int8_t restart = data[ind++];
 
-		static bool buffered_channel_created = false;
 		static int32_t offset_last = -1;
 		static int16_t result_last = -1;
 
 		if (offset == 0) {
 			if (!lisp_thd_running) {
-				lispif_restart(true, restart == 2 ? true : false);
-				buffered_channel_created = false;
+				lispif_restart(true, restart == 2 ? true : false, true);
 			} else if (restart == 1) {
-				lispif_restart(true, false);
-				buffered_channel_created = false;
+				lispif_restart(true, false, true);
 			} else if (restart == 2) {
-				lispif_restart(true, true);
-				buffered_channel_created = false;
+				lispif_restart(true, true, true);
 			}
 		}
 
@@ -497,7 +507,7 @@ void lispif_process_cmd(unsigned char *data, unsigned int len,
 		}
 
 		if (offset == 0) {
-			if (buffered_channel_created) {
+			if (string_tok_valid) {
 				int timeout = 1500;
 				while (!buffered_tok_state.reader_closed) {
 					lbm_channel_writer_close(&buffered_string_tok);
@@ -518,15 +528,9 @@ void lispif_process_cmd(unsigned char *data, unsigned int len,
 				}
 			}
 
-			int timeout_cnt = 1000;
 			lispif_lock_lbm();
-			lbm_pause_eval_with_gc(30);
-			while (lbm_get_eval_state() != EVAL_CPS_STATE_PAUSED && timeout_cnt > 0) {
-				chThdSleep(5);
-				timeout_cnt--;
-			}
 
-			if (timeout_cnt == 0) {
+			if (!pause_eval(30, 1000)) {
 				lispif_unlock_lbm();
 				result_last = -3;
 				offset_last = -1;
@@ -537,6 +541,7 @@ void lispif_process_cmd(unsigned char *data, unsigned int len,
 			}
 
 			lbm_create_buffered_char_channel(&buffered_tok_state, &buffered_string_tok);
+			string_tok_valid = true;
 
 			if (lbm_load_and_eval_program(&buffered_string_tok, "main-s") <= 0) {
 				lispif_unlock_lbm();
@@ -549,8 +554,15 @@ void lispif_process_cmd(unsigned char *data, unsigned int len,
 			}
 
 			lbm_continue_eval();
-			buffered_channel_created = true;
 			lispif_unlock_lbm();
+		}
+
+		if (!string_tok_valid) {
+			result_last = -15;
+			buffer_append_int16(send_buffer, result_last, &send_ind);
+			commands_printf_lisp("Tokenizer Invalid");
+			reply_func(send_buffer, ind);
+			break;
 		}
 
 		int32_t written = 0;
@@ -576,6 +588,7 @@ void lispif_process_cmd(unsigned char *data, unsigned int len,
 		if (ind == (int32_t)len) {
 			if ((offset + written) == tot_len) {
 				lbm_channel_writer_close(&buffered_string_tok);
+				string_tok_valid = false;
 				offset_last = -1;
 				commands_printf_lisp("Stream done, starting...");
 			}
@@ -628,11 +641,12 @@ static void done_callback(eval_context_t *ctx) {
 	}
 }
 
-bool lispif_restart(bool print, bool load_code) {
+bool lispif_restart(bool print, bool load_code, bool load_imports) {
 	bool res = false;
 
 	restart_cnt++;
 	prof_running = false;
+	string_tok_valid = false;
 
 	char *code_data = (char*)flash_helper_code_data(CODE_IND_LISP);
 	int32_t code_len = flash_helper_code_size(CODE_IND_LISP);
@@ -642,12 +656,11 @@ bool lispif_restart(bool print, bool load_code) {
 
 		if (!lisp_thd_running) {
 			lbm_init(heap, HEAP_SIZE,
-					GC_STACK_SIZE,
 					memory_array, LISP_MEM_SIZE,
 					bitmap_array, LISP_MEM_BITMAP_SIZE,
-					print_stack_storage, PRINT_STACK_SIZE,
+					GC_STACK_SIZE,
+					PRINT_STACK_SIZE,
 					extension_storage, EXTENSION_STORAGE_SIZE);
-			lbm_variables_init(variable_storage, VARIABLE_STORAGE_SIZE);
 			lbm_eval_init_events(20);
 
 			lbm_set_timestamp_us_callback(timestamp_callback);
@@ -658,19 +671,18 @@ bool lispif_restart(bool print, bool load_code) {
 
 			lisp_thd_running = true;
 		} else {
-			lbm_pause_eval();
-			while (lbm_get_eval_state() != EVAL_CPS_STATE_PAUSED) {
-				lbm_pause_eval();
+			lbm_reset_eval();
+			while (lbm_get_eval_state() != EVAL_CPS_STATE_RESET) {
+				lbm_reset_eval();
 				chThdSleepMilliseconds(1);
 			}
 
 			lbm_init(heap, HEAP_SIZE,
-					GC_STACK_SIZE,
 					memory_array, LISP_MEM_SIZE,
 					bitmap_array, LISP_MEM_BITMAP_SIZE,
-					print_stack_storage, PRINT_STACK_SIZE,
+					GC_STACK_SIZE,
+					PRINT_STACK_SIZE,
 					extension_storage, EXTENSION_STORAGE_SIZE);
-			lbm_variables_init(variable_storage, VARIABLE_STORAGE_SIZE);
 			lbm_eval_init_events(20);
 		}
 
@@ -701,26 +713,27 @@ bool lispif_restart(bool print, bool load_code) {
 			code_data = (char*)flash_helper_code_data_raw(CODE_IND_LISP);
 		}
 
-		const_heap_ptr = (lbm_uint*)(code_data + code_len + 16);
-		const_heap_ptr = (lbm_uint*)((uint32_t)const_heap_ptr & 0xFFFFFFF4);
-		uint32_t const_heap_len = ((uint32_t)code_data + 1024 * 128) - (uint32_t)const_heap_ptr;
-		lbm_const_heap_init(const_heap_write, &const_heap, const_heap_ptr, const_heap_len);
+		const_heap_max_ind = 0;
+		const_heap_ptr = (lbm_uint*)flash_helper_code_data_raw(CODE_IND_LISP_CONST);
+		lbm_const_heap_init(const_heap_write, &const_heap, const_heap_ptr, 1024 * 128);
 
 		// Load imports
-		if (code_len > code_chars + 3) {
-			int32_t ind = code_chars + 1;
-			uint16_t num_imports = buffer_get_uint16((uint8_t*)code_data, &ind);
+		if (load_imports) {
+			if (code_len > code_chars + 3) {
+				int32_t ind = code_chars + 1;
+				uint16_t num_imports = buffer_get_uint16((uint8_t*)code_data, &ind);
 
-			if (num_imports > 0 && num_imports < 500) {
-				for (int i = 0;i < num_imports;i++) {
-					char *name = code_data + ind;
-					ind += strlen(name) + 1;
-					int32_t offset = buffer_get_int32((uint8_t*)code_data, &ind);
-					int32_t len = buffer_get_int32((uint8_t*)code_data, &ind);
+				if (num_imports > 0 && num_imports < 500) {
+					for (int i = 0;i < num_imports;i++) {
+						char *name = code_data + ind;
+						ind += strlen(name) + 1;
+						int32_t offset = buffer_get_int32((uint8_t*)code_data, &ind);
+						int32_t len = buffer_get_int32((uint8_t*)code_data, &ind);
 
-					lbm_value val;
-					if (lbm_share_array(&val, code_data + offset, len)) {
-						lbm_define(name, val);
+						lbm_value val;
+						if (lbm_share_array(&val, code_data + offset, len)) {
+							lbm_define(name, val);
+						}
 					}
 				}
 			}
@@ -757,6 +770,10 @@ void lispif_add_ext_load_callback(void (*p_func)(void)) {
 	}
 }
 
+lbm_uint lispif_const_heap_max_ind(void)  {
+	return const_heap_max_ind;
+}
+
 static uint32_t timestamp_callback(void) {
 	systime_t t = chVTGetSystemTimeX();
 	return (uint32_t) ((1000000 / CH_CFG_ST_FREQUENCY) * t);
@@ -767,8 +784,17 @@ static void sleep_callback(uint32_t us) {
 }
 
 static bool const_heap_write(lbm_uint ix, lbm_uint w) {
+	if (ix > const_heap_max_ind) {
+		const_heap_max_ind = ix;
+	}
+
 	if (const_heap_ptr[ix] == w) {
 		return true;
+	}
+
+	if (const_heap_ptr[ix] != 0xffffffff) {
+		commands_printf_lisp("Attempted to write to const heap at %d, but it is already occupied", ix);
+		return false;
 	}
 
 	FLASH_Unlock();
@@ -791,3 +817,5 @@ static THD_FUNCTION(eval_thread, arg) {
 	lbm_run_eval();
 	lisp_thd_running = false;
 }
+
+#pragma GCC pop_options

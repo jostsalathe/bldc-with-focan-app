@@ -1,5 +1,5 @@
 /*
-    Copyright 2022, 2023 Joel Svensson  svenssonjoel@yahoo.se
+    Copyright 2022 - 2024 Joel Svensson  svenssonjoel@yahoo.se
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -25,16 +25,66 @@ extern "C" {
 #endif
 
 /** LBM major version */
-#define LBM_MAJOR_VERSION 0
+#define LBM_MAJOR_VERSION 0u
 /** LBM minor version */
-#define LBM_MINOR_VERSION 19
+#define LBM_MINOR_VERSION 27u
 /** LBM patch revision */
-#define LBM_PATCH_VERSION 0
+#define LBM_PATCH_VERSION 1u
 
-#define LBM_VERSION_STRING "0.19.0"
+#define LBM_VERSION_STRING "0.27.1"
 
 /*! \page changelog Changelog
-OCT 8 2024: Version 0.19.0
+NOV 5 2024: Version 0.27.0
+  - A number of important bugfixes. A write out of bounds among the most important.
+  - Addition of integer division operation (By Rasmus S)
+  - A lot of refactoring for readability of code and reduce code complexity.
+  - A defragmentable memory (compactible memory area).
+  - Vesc interfacing in the LBM REPL.
+AUG 6 2024: Version 0.26.0
+  - Bugfix related to restargs.
+  - coverage report in relation to the unit tests.
+JUL 23 2024: Version 0.25.0
+  - Multiple bugfixes.
+  - Trap function on expressions.
+  - Reference manual updates.
+  - New String operations (Thanks Rasmus S)
+  - Order of writes changed when writing to flash.
+
+APR 28 2024: Version 0.24.0
+  - Cleaning of lispbm repository. less to maintain.
+  - Lots of improvements to documentation.
+  - lbm_memory optimization.
+
+MAR 9 2024: Version 0.23.0
+  - rest-args functionality added to function application of lambda defined function.
+  - Improved x86 REPL.
+  - Refernce manual is generated from LispBM script.
+  - Optional env arguments for eval and eval-program.
+  - Backwards indexing in setix using negative numbers.
+  - Bug fix: type promotion
+  - Bug fix: addition and subtraction of byte values
+
+DEC 26 2023: Version 0.22.0
+  - Built-in sort operation on lists.
+  - Built-in list-merge operation.
+  - Bugfix in map.
+  - Literal forms for special characters.
+
+
+NOV 28 2023: Version 0.21.0
+  - Removed partial evaluation.
+  - Added a built-in loop.
+  - Modification to built-in implementation of map.
+  - Addition of pointer-reversal garbage collector. Not on by default.
+  - Improved error messages.
+
+NOV 1 2023: Version 0.20.0
+  - Added lbm_set_error_suspect function to enable extension authors to point out in more detail what is wrong.
+  - Improvement to error messages in some cases.
+  - Changed behavior of set family on functions when variable is not already bound (now an error).
+  - Fix of bug in flat_value handling.
+
+OCT 8 2023: Version 0.19.0
   - Error message and callback on GC stack overflow.
   - Functions for gc stack size statistics added.
   - GC does not look at constant values.
@@ -62,7 +112,7 @@ JUN 29 2023: version 0.15.0
   - Bug fix in reader.
   - Bug fix in dynamic load.
   - Bug fix in quasiquotation expansion.
-  - 
+  -
 
 JUN 8 2023: Version 0.14.0
   - wait-for that blocks code unless a flag is set.

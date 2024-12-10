@@ -17,13 +17,8 @@ The LispBM mascot, Lispy the llama, was created by
 
 ## Want to get involved and help out?
 
-There are lots of interesting things to code on in and around the
-LispBM runtime system.
-
-1. Are you interested in microcontrollers and programming languages?
-2. You find it fun to mess around in C code with close to zero comments?
-3. Then join in the fun. Lots to do, so little time!
-4. Poke me by mail bo(dot)joel(dot)svensson(whirly-a)gmail(dot)com.
+ - Check out the [lispbm.com](http://www.lispbm.com) website.
+ - Join the [discord server](https://discord.gg/urtJUUMnwQ).
 
 ## Getting started 
 
@@ -43,49 +38,45 @@ what we call "extensions" which are C functions that can be called from your Lis
 ### Documentation
 
  - Work in progress [LispBM language reference](./doc/lbmref.md).
+ - Work in prograss [LispBM display library reference](./doc/displayref.md).
+ - [LispBM runtime system library reference](./doc/runtimeref.md).
  - Gotchas and caveats [Gotchas and caveats](./doc/gotchas.md).
- - Work in progress [LispBM programming manual](./doc/manual).
+ - !OUTDATED! [LispBM programming manual](./doc/manual).
  - C code documentation can be found [here](http://svenssonjoel.github.io/lbmdoc/html/index.html).
- - LispBM's internals are documented as a series of [blog posts](http://svenssonjoel.github.io).
+ - LispBM's internals are documented as a series of (now quite outdated) [blog posts](http://svenssonjoel.github.io).
  - There are [demonstrations on YouTube](https://youtube.com/playlist?list=PLtf_3TaqZoDOQqZcB9Yj-R1zS2DWDZ9q9).
 
-### Compile a 64bit binary for linux
+## The LBM REPL
 
-1. Build the repl: `cd repl` and then `make all64`
+There is an example REPL implementation that runs on X86 32 or 64bit in the `repl` directory.
+The REPL depends on libreadline.
 
-2. Run the repl: `./repl`
 
-## Compile a 32bit binary for linux (Requires 32bit libraries. May need something like "multilib" on a 64bit linux)
+**REPL Dependencies for 32Bit executable on 64Bit linux:**
+* libreadline
+* lib32readline
+* gcc-multilib
+* libpng
 
-1. Build the repl: `cd repl` and then `make`
-
-2. Run the repl: `./repl`
-
-### Compile on Raspberry Pi
-
-To build the library exeute the following command in the lispbm folder:
-
-```
-PLATFORM=pi make
+On Ubunty you can obtain the depencies by:
+```shell
+sudo apt-get install gcc-multilib libreadline-dev lib32readline-dev libpng-dev libpng-dev:i386
 ```
 
-To build the `repl` example repl do:
+Then issue command `make` in the repl directory.
 
+There is also a Nix flake (see details below). You can build and run the repl using `nix run`. This will build the 32 bit version. For the 64 bit repl you instead run `nix run .#repl64`.
+
+### Editor support
+
+* [vesc_tool](https://vesc-project.com/vesc_tool)
+* [vscode support](https://marketplace.visualstudio.com/items?itemName=rasmus-soderhielm.lispbm-language-support)
+
+## Development
+
+There is a Nix flake to help you build the repl and documentation. It outputs packages for the 32 and 64 bit repl: `repl` and `repl64`, the documentation: `doc`, and the doxygen source code documentation: `c-doc`. Assuming you have Nix installed, you can build these using
+```shell
+nix build .#<package>
 ```
-cd repl
-make pirepl
-```
 
-Then start it up using `./repl`
-Building the library is not a prerequisite for building the repl anymore.
-
-### SDL and LispBM
-
-In the `sdlrepl` directory there is a start of a set of SDL bindings for LispBM.
-
-To build this repl you need the following dependencies:
-
-1. libsdl2-dev - `sudo apt-get install libsdl2-dev`
-2. libsdl2-image-dev - `sudo apt-get install libsdl2-image-dev`
-
-Then compile the repl using the command `make`
+The generated output is then placed in the `result/` directory. However `doc` and `c-doc` packages might not make much sense to build in this way because they are supposed to generate files inside the repository tree. Therefore, it makes more sense to instead enter their respective development environment with `nix develop .#<package>`. This places you in a new shell with the required dependencies installed where you can build them with `make`. 

@@ -109,19 +109,10 @@ typedef enum {
 	TEMP_SENSOR_DISABLED
 } temp_sensor_type;
 
-// General purpose drive output mode
-typedef enum {
-	GPD_OUTPUT_MODE_NONE = 0,
-	GPD_OUTPUT_MODE_MODULATION,
-	GPD_OUTPUT_MODE_VOLTAGE,
-	GPD_OUTPUT_MODE_CURRENT
-} gpd_output_mode;
-
 typedef enum {
 	MOTOR_TYPE_BLDC = 0,
 	MOTOR_TYPE_DC,
-	MOTOR_TYPE_FOC,
-	MOTOR_TYPE_GPD
+	MOTOR_TYPE_FOC
 } mc_motor_type;
 
 // FOC current controller decoupling mode.
@@ -137,7 +128,16 @@ typedef enum {
 	FOC_OBSERVER_MXLEMMING,
 	FOC_OBSERVER_ORTEGA_LAMBDA_COMP,
 	FOC_OBSERVER_MXLEMMING_LAMBDA_COMP,
+	FOC_OBSERVER_MXV,
+	FOC_OBSERVER_MXV_LAMBDA_COMP,
+	FOC_OBSERVER_MXV_LAMBDA_COMP_LIN,
 } mc_foc_observer_type;
+
+typedef enum {
+	FOC_AMB_MODE_SIX_VECTOR = 0,
+	FOC_AMB_MODE_D_SINGLE_PULSE,
+	FOC_AMB_MODE_D_DOUBLE_PULSE
+} mc_foc_hfi_amb_mode;
 
 typedef enum {
 	FAULT_CODE_NONE = 0,
@@ -238,7 +238,8 @@ typedef enum {
 	DEBUG_SAMPLING_TRIGGER_FAULT,
 	DEBUG_SAMPLING_TRIGGER_START_NOSEND,
 	DEBUG_SAMPLING_TRIGGER_FAULT_NOSEND,
-	DEBUG_SAMPLING_SEND_LAST_SAMPLES
+	DEBUG_SAMPLING_SEND_LAST_SAMPLES,
+	DEBUG_SAMPLING_SEND_SINGLE_SAMPLE
 } debug_sampling_mode;
 
 typedef enum {
@@ -283,8 +284,15 @@ typedef struct {
 	float t_limit_end;
 	float soc_limit_start;
 	float soc_limit_end;
+	float vmin_limit_start;
+	float vmin_limit_end;
+	float vmax_limit_start;
+	float vmax_limit_end;
 	BMS_FWD_CAN_MODE fwd_can_mode;
 } bms_config;
+
+#define BMS_MAX_CELLS	50
+#define BMS_MAX_TEMPS	50
 
 typedef struct {
 	float v_tot;
@@ -294,12 +302,13 @@ typedef struct {
 	float ah_cnt;
 	float wh_cnt;
 	int cell_num;
-	float v_cell[32];
-	bool bal_state[32];
+	float v_cell[BMS_MAX_CELLS];
+	bool bal_state[BMS_MAX_CELLS];
 	int temp_adc_num;
-	float temps_adc[50];
+	float temps_adc[BMS_MAX_TEMPS];
 	float temp_ic;
 	float temp_hum;
+	float pressure;
 	float hum;
 	float temp_max_cell;
 	float soc;
@@ -463,16 +472,20 @@ typedef struct {
 	float foc_current_filter_const;
 	mc_foc_cc_decoupling_mode foc_cc_decoupling;
 	mc_foc_observer_type foc_observer_type;
+	mc_foc_hfi_amb_mode foc_hfi_amb_mode;
+	float foc_hfi_amb_current;
+	uint8_t foc_hfi_amb_tres;
 	float foc_hfi_voltage_start;
 	float foc_hfi_voltage_run;
 	float foc_hfi_voltage_max;
 	float foc_hfi_gain;
+	float foc_hfi_max_err;
 	float foc_hfi_hyst;
 	float foc_sl_erpm_hfi;
 	uint16_t foc_hfi_start_samples;
 	float foc_hfi_obs_ovr_sec;
 	foc_hfi_samples foc_hfi_samples;
-	bool foc_offsets_cal_on_boot;
+	uint8_t foc_offsets_cal_mode;
 	float foc_offsets_current[3];
 	float foc_offsets_voltage[3];
 	float foc_offsets_voltage_undriven[3];
@@ -486,13 +499,7 @@ typedef struct {
 	float foc_fw_ramp_time;
 	float foc_fw_q_current_factor;
 	FOC_SPEED_SRC foc_speed_soure;
-
-	// GPDrive
-	int gpd_buffer_notify_left;
-	int gpd_buffer_interpol;
-	float gpd_current_filter_const;
-	float gpd_current_kp;
-	float gpd_current_ki;
+	bool foc_short_ls_on_zero_duty;
 
 	PID_RATE sp_pid_loop_rate;
 
@@ -1094,6 +1101,13 @@ typedef enum {
 	COMM_LOG_DATA_F64						= 151,
 
 	COMM_LISP_RMSG							= 152,
+
+	//Placeholders for pinlock commands
+	//COMM_PINLOCK1							= 153,
+	//COMM_PINLOCK2							= 154,
+	//COMM_PINLOCK3							= 155,
+
+	COMM_SHUTDOWN							= 156,
 } COMM_PACKET_ID;
 
 // CAN commands
