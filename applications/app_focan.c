@@ -210,7 +210,7 @@ void processByte(uint8_t data) {
 static void checkMsgTimeout(void) {
 	if (chVTTimeElapsedSinceX(timeLastValidMessage) > MS2ST(MSG_TIMEOUT_MS)) {
 		// shut off motor
-		mc_interface_set_current_rel(0);
+		mc_interface_set_current_rel(0.0);
 
 		// reset timeout
 		timeLastValidMessage = chVTGetSystemTime();
@@ -239,10 +239,13 @@ void interpreteRxData(void) {
 	uint16_t speedLever = ((RxBuffer[16] & 0x03) << 8) + RxBuffer[17];
 	if (enablePrintf)
 	commands_printf("%6d %1d %04d", ST2MS(chVTGetSystemTime()), breaksReleased, speedLever);
-	if (breaksReleased && speedLever >= 400) {
-		mc_interface_set_current_rel((speedLever - 400) / 600.0);
+
+	float throttle = speedLever >= 400 ? (speedLever - 400) / 600.0 : 0.0;
+	if (breaksReleased && throttle > 0.0) {
+		mc_interface_set_current_rel(throttle);
 	} else {
-		mc_interface_set_current_rel(0);
+		mc_interface_set_brake_current_rel(throttle);
+	}
 }
 
 void checkBreaksReleased(void) {
