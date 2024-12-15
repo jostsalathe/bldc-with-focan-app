@@ -23,6 +23,7 @@
 
 // Some useful includes
 #include "mc_interface.h"
+#include "mempools.h"
 #include "utils_math.h"
 #include "terminal.h"
 #include "hw.h"
@@ -339,11 +340,22 @@ void sendResponse(void) {
 static void setErpmLimited(bool limited) {
 	static bool currentlyLimited = true;
 	if (limited != currentlyLimited) {
-		float newErpm = limited ? ERPM_LIMITED : ERPM_FREE;
+		// only use "unlimited" ERPM limit if the brake is engaged while switching the "light" on
+		float newErpm = limited || breaksReleased ? ERPM_LIMITED : ERPM_FREE;
+
 		// TODO see comm/commands.c > commands_process_packet() case COMM_SET_MCCONF
+		mc_configuration *mcconf = mempools_alloc_mcconf();
+		*mcconf = *mc_interface_get_configuration();
+
+		mcconf->l_max_erpm = newErpm;
+
+		commands_apply_mcconf_hw_limits(mcconf);
+		mc_interface_set_configuration(mcconf);
+
 		if (enablePrintf)
 		commands_printf("Updated ERPM to %d (%slimited) (TODO not actually)", (int32_t) newErpm, limited ? "" : "un");
 
+		mempools_free_mcconf(mcconf);
 		currentlyLimited = limited;
 	}
 }
