@@ -45,6 +45,7 @@ static void terminalCallback(int argc, const char **argv);
 static void processByte(uint8_t data);
 static void checkMsgTimeout(void);
 static void interpreteRxData(void);
+static void checkBreaksReleased(void);
 static bool crcValid(void);
 static void sendResponse(void);
 static void setErpmLimited(bool limited); // TODO
@@ -60,7 +61,7 @@ static volatile systime_t timeLastValidMessage;
 
 #define BREAKS_RELEASED_PORT	HW_ADC_EXT_GPIO
 #define BREAKS_RELEASED_PIN		HW_ADC_EXT_PIN
-static bool breaksReleased;
+static volatile bool breaksReleased;
 
 #define ERPM_LIMITED	6893.0	// 22 km/h
 #define ERPM_FREE		13158.0	// 42 km/h
@@ -160,10 +161,6 @@ static THD_FUNCTION(focan_protocol_thread, arg) {
 		timeout_reset(); // Reset timeout if everything is OK.
 
 		// Run your logic here. A lot of functionality is available in mc_interface.h.
-		breaksReleased = palReadPad(BREAKS_RELEASED_PORT, BREAKS_RELEASED_PIN);
-		//if (enablePrintf)
-		//commands_printf("Break state: %s", breaksReleased ? "pulled" : "release");
-
 		checkMsgTimeout();
 
 		chEvtWaitAnyTimeout(ALL_EVENTS, 100);
@@ -200,6 +197,7 @@ void processByte(uint8_t data) {
 						RxBuffer[5], RxBuffer[6], RxBuffer[7], RxBuffer[8], RxBuffer[9],
 						RxBuffer[10], RxBuffer[11], RxBuffer[12], RxBuffer[13], RxBuffer[14],
 						RxBuffer[15], RxBuffer[16], RxBuffer[17], RxBuffer[18], RxBuffer[19]);
+		checkBreaksReleased();
 		if (crcValid()) {
 			timeLastValidMessage = chVTGetSystemTime();
 			interpreteRxData();
@@ -245,7 +243,28 @@ void interpreteRxData(void) {
 		mc_interface_set_current_rel((speedLever - 400) / 600.0);
 	} else {
 		mc_interface_set_current_rel(0);
+}
+
+void checkBreaksReleased(void) {
+	// variables for some crude debouncing:
+	//  the pad needs to read the same value three cycles in a row before breaksReleased is touched
+	static bool padReadReleasedLastTime = FALSE;
+	static bool padReadReleasedLastLastTime = FALSE;
+
+	bool padReadsReleased = palReadPad(BREAKS_RELEASED_PORT, BREAKS_RELEASED_PIN);
+
+	if (padReadsReleased == padReadReleasedLastTime
+		&& padReadReleasedLastTime == padReadReleasedLastLastTime) {
+		breaksReleased = padReadsReleased;
 	}
+
+	if (enablePrintf)
+	commands_printf("Break released (%d%d%d)? %s",
+		padReadsReleased, padReadReleasedLastTime, padReadReleasedLastLastTime,
+		breaksReleased ? "released" : "pulled");
+
+	padReadReleasedLastLastTime = padReadReleasedLastTime;
+	padReadReleasedLastTime = padReadsReleased;
 }
 
 // reveng.exe: width=8  poly=0x01  init=0x00  refin=FALSE  refout=FALSE  xorout=0x00  check=0x31  residue=0x00  name=(none)
