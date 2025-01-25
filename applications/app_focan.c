@@ -64,8 +64,8 @@ static volatile systime_t timeLastValidMessage;
 #define BREAKS_RELEASED_PIN		HW_ADC_EXT_PIN
 static volatile bool breaksReleased;
 
-#define ERPM_LIMITED	6893.0	// 22 km/h
-#define ERPM_FREE		13158.0	// 42 km/h
+#define ERPM_LIMITED	7033.0	// 22 km/h
+#define ERPM_FREE		13427.0	// 42 km/h
 
 
 static SerialConfig uart_cfg = {
