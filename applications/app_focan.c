@@ -253,21 +253,23 @@ void checkBreaksReleased(void) {
 	// variables for some crude debouncing:
 	//  the pad needs to read the same value three cycles in a row before breaksReleased is touched
 	static bool padReadReleasedLastTime = FALSE;
-	static bool padReadReleasedLastLastTime = FALSE;
+	//static bool padReadReleasedLastLastTime = FALSE;
 
 	bool padReadsReleased = palReadPad(BREAKS_RELEASED_PORT, BREAKS_RELEASED_PIN);
 
-	if (padReadsReleased == padReadReleasedLastTime
-		&& padReadReleasedLastTime == padReadReleasedLastLastTime) {
+	if (padReadsReleased == padReadReleasedLastTime) {
+		//&& padReadReleasedLastTime == padReadReleasedLastLastTime) {
 		breaksReleased = padReadsReleased;
 	}
 
 	if (enablePrintf)
-	commands_printf("Break released (%d%d%d)? %s",
-		padReadsReleased, padReadReleasedLastTime, padReadReleasedLastLastTime,
+	//commands_printf("Break released (%d%d%d)? %s",
+	//	padReadsReleased, padReadReleasedLastTime, padReadReleasedLastLastTime,
+	commands_printf("Break released (%d%d)? %s",
+		padReadsReleased, padReadReleasedLastTime,
 		breaksReleased ? "released" : "pulled");
 
-	padReadReleasedLastLastTime = padReadReleasedLastTime;
+	//padReadReleasedLastLastTime = padReadReleasedLastTime;
 	padReadReleasedLastTime = padReadsReleased;
 }
 
