@@ -363,5 +363,7 @@ static void setErpmLimited(bool limited) {
 }
 
 static void terminalCallback(int argc, const char **argv) {
+	(void) argc;
+	(void) argv;
 	enablePrintf = !enablePrintf;
 }
