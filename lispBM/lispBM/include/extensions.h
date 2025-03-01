@@ -1,6 +1,6 @@
 /** \file extensions.h */
 /*
-    Copyright 2019, 2022 Joel Svensson        svenssonjoel@yahoo.se
+    Copyright 2019, 2022, 2024 Joel Svensson        svenssonjoel@yahoo.se
                     2022 Benjamin Vedder
 
     This program is free software: you can redistribute it and/or modify
@@ -20,7 +20,6 @@
 #ifndef EXTENSIONS_H_
 #define EXTENSIONS_H_
 
-#include "symrepr.h"
 #include "heap.h"
 #include "lbm_types.h"
 #include "lbm_constants.h"
@@ -29,9 +28,6 @@
 extern "C" {
 #endif
 
-#define LBM_EXTENSION(name, argv, argn)                                 \
-  __attribute__((aligned(LBM_STORABLE_ADDRESS_ALIGNMENT))) lbm_value name(lbm_value *(argv), lbm_uint (argn)) 
-
 /** Type representing an extension function.
  * \param Pointer to array of lbm_values.
  * \param Number of arguments.
@@ -39,13 +35,25 @@ extern "C" {
  */
 typedef lbm_value (*extension_fptr)(lbm_value*,lbm_uint);
 
-/** Initialize the extensions subsystem.
+/** Type representing an entry in the extension table
+ */
+typedef struct {
+  extension_fptr fptr;
+  char *name;
+} lbm_extension_t;
+
+
+extern lbm_extension_t *extension_table;
+
+#define LBM_EXTENSION(name, argv, argn)                                 \
+  __attribute__((aligned(LBM_STORABLE_ADDRESS_ALIGNMENT))) lbm_value name(lbm_value *(argv), lbm_uint (argn))
+
+/** Initialize the extensions subsystem. Extension storage is allocated on lbm_memory.
  *
- * \param extension_storage Pointer to array of extension_fptr.
  * \param extension_storage_size Size of function pointer array.
  * \return 1 on success and 0 for failure
  */
-int lbm_extensions_init(extension_fptr *extension_storage, int extension_storage_size);
+  int lbm_extensions_init(lbm_extension_t *extension_storage, lbm_uint extension_storage_size);
 /** The number of extensions that can be allocated.
  * \return The maximum number of extensions that can be added.
  */
@@ -54,6 +62,12 @@ lbm_uint lbm_get_max_extensions(void);
  * \return The number of extensions that have been added.
  */
 lbm_uint lbm_get_num_extensions(void);
+/** Lookup an extensions index.
+ * \param sym_str Extension name to look up.
+ * \param ix Pointer used to store result.
+ * \return true on success, false otherwise.
+ */
+bool lbm_lookup_extension_id(char *sym_str, lbm_uint *ix);
 /** Look up an extension associated with a key symbol.
  *
  * \param sym Symbol bound to the extension to look for.
@@ -114,6 +128,49 @@ bool lbm_check_argn_number(lbm_value *args, lbm_uint argn, lbm_uint n);
 #define LBM_CHECK_ARGN(n) if (!lbm_check_argn(argn, n)) {return ENC_SYM_EERROR;}
 #define LBM_CHECK_ARGN_NUMBER(n) if (!lbm_check_argn_number(args, argn, n)) {return ENC_SYM_EERROR;}
 
+lbm_value lbm_extensions_default(lbm_value *args, lbm_uint argn);
+
+// Extension writing helpers
+
+extern lbm_value make_list(int num, ...);
+extern bool strmatch(const char *str1, const char *str2);
+  
+static inline lbm_value mk_lam(lbm_value args, lbm_value body) {
+  return make_list(3, ENC_SYM_LAMBDA, args, body);
+}
+
+static inline lbm_value mk_call_cc(lbm_value body) {
+  return make_list(2, ENC_SYM_CALL_CC_UNSAFE, body);
+}
+
+static inline lbm_value mk_let(lbm_value bindings, lbm_value body) {
+  return make_list(3, ENC_SYM_LET, bindings, body);
+}
+
+static inline lbm_value mk_if(lbm_value cond, lbm_value tb, lbm_value fb) {
+  return make_list(4, ENC_SYM_IF, cond, tb, fb);
+}
+
+static inline lbm_value mk_inc(lbm_value v) {
+  return make_list(3, ENC_SYM_ADD, v, lbm_enc_i(1));
+}
+
+static inline lbm_value mk_lt(lbm_value a, lbm_value b) {
+  return make_list(3, ENC_SYM_LT, a, b);
+}
+
+static inline lbm_value mk_eq(lbm_value a, lbm_value b) {
+  return make_list(3, ENC_SYM_EQ, a, b);
+}
+
+static inline lbm_value mk_car(lbm_value a) {
+  return make_list(2, ENC_SYM_CAR, a);
+}
+
+static inline lbm_value mk_cdr(lbm_value a) {
+  return make_list(2, ENC_SYM_CDR, a);
+}
+  
 #ifdef __cplusplus
 }
 #endif
