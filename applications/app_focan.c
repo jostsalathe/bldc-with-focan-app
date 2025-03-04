@@ -79,11 +79,14 @@ enum {
 	LOG_INDEX_V_BAT,		// [V]
 	LOG_INDEX_I_BAT,		// [A]
 	LOG_INDEX_I_MOT,		// [A]
-	LOG_INDEX_E,			// [Wh]
-	LOG_INDEX_E_CHG,		// [Wh]
+	LOG_INDEX_WH,			// [Wh]
+	LOG_INDEX_WH_CHG,		// [Wh]
+	LOG_INDEX_AH,			// [Ah]
+	LOG_INDEX_AH_CHG,		// [Ah]
 	LOG_INDEX_DUTY,			// []
 	LOG_INDEX_SPEED,		// [km/h]
-	LOG_INDEX_TRIP,			// [km]
+	LOG_INDEX_TRIP,			// [m]
+	LOG_INDEX_TRIP_ABS,		// [m]
 	LOG_INDEX_TEMP_FET,		// [°C]
 	LOG_INDEX_FAULT,		// []
 	// items after this get updated on change
@@ -128,13 +131,16 @@ void app_custom_start(void) {
 	log_config_field(LOG_CAN_ID, LOG_INDEX_V_BAT, "v_bat", "Battery Voltage", "V", 3, false, false);
 	log_config_field(LOG_CAN_ID, LOG_INDEX_I_BAT, "i_bat", "Battery Current", "A", 3, false, false);
 	log_config_field(LOG_CAN_ID, LOG_INDEX_I_MOT, "i_mot", "Motor Current", "A", 3, false, false);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_E, "e", "Energy Consumed", "Wh", 3, false, false);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_E_CHG, "e_chg", "Energy Charged", "Wh", 3, false, false);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_WH, "cnt_wh", "Energy Consumed", "Wh", 3, false, false);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_WH_CHG, "cnt_wh_chg", "Energy Charged", "Wh", 3, false, false);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_AH, "cnt_ah", "Amphours Consumed", "Ah", 3, false, false);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_AH_CHG, "cnt_ah_chg", "Amphours Charged", "Ah", 3, false, false);
 	log_config_field(LOG_CAN_ID, LOG_INDEX_DUTY, "duty", "Duty Cycle", "", 3, false, false);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_SPEED, "spd", "Speed", "km/h", 3, false, false);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_TRIP, "trip", "Trip Distance", "km", 3, false, false);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_SPEED, "spd", "Speed", "km/h", 2, false, false);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_TRIP, "trip_vesc", "Trip", "m", 1, false, false);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_TRIP_ABS, "trip_vesc_abs", "Trip Absolute", "m", 1, false, false);
 	log_config_field(LOG_CAN_ID, LOG_INDEX_TEMP_FET, "tmp", "MOSFET Temperature", "°C", 2, false, false);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_FAULT, "flt", "Fault Code", "", 3, false, false);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_FAULT, "fault", "Fault Code", "", 3, false, false);
 	log_config_field(LOG_CAN_ID, LOG_INDEX_THROTTLE, "thr", "Throttle", "", 3, false, false);
 	log_config_field(LOG_CAN_ID, LOG_INDEX_BREAKING, "br", "Break Indicator", "", 0, false, false);
 	log_config_field(LOG_CAN_ID, LOG_INDEX_SPEED_LIMIT, "spd_lim", "Speed Limit", "km/h", 1, false, false);
@@ -397,11 +403,14 @@ static void logMcData(void) {
 	samples[LOG_INDEX_V_BAT]	= mc_interface_get_input_voltage_filtered();
 	samples[LOG_INDEX_I_BAT]	= mc_interface_get_tot_current_in_filtered();
 	samples[LOG_INDEX_I_MOT]	= mc_interface_get_tot_current_filtered();
-	samples[LOG_INDEX_E]		= mc_interface_get_watt_hours(false);
-	samples[LOG_INDEX_E_CHG]	= mc_interface_get_watt_hours_charged(false);
+	samples[LOG_INDEX_WH]		= mc_interface_get_watt_hours(false);
+	samples[LOG_INDEX_WH_CHG]	= mc_interface_get_watt_hours_charged(false);
+	samples[LOG_INDEX_AH]		= mc_interface_get_amp_hours(false);
+	samples[LOG_INDEX_AH_CHG]	= mc_interface_get_amp_hours_charged(false);
 	samples[LOG_INDEX_DUTY]		= mc_interface_get_duty_cycle_now();
 	samples[LOG_INDEX_SPEED]	= mc_interface_get_speed() * 3.6f;
-	samples[LOG_INDEX_TRIP]		= mc_interface_get_distance() / 1000.0f;
+	samples[LOG_INDEX_TRIP]		= mc_interface_get_distance();
+	samples[LOG_INDEX_TRIP_ABS]	= mc_interface_get_distance();
 	samples[LOG_INDEX_TEMP_FET]	= mc_interface_temp_fet_filtered();
 	samples[LOG_INDEX_FAULT]	= mc_interface_get_fault();
 
