@@ -98,8 +98,6 @@ void app_custom_start(void) {
 	RxIndex = 0;
 	breaksReleased = FALSE;
 
-	chThdCreateStatic(focan_protocol_thread_wa, sizeof(focan_protocol_thread_wa),
-			NORMALPRIO, focan_protocol_thread, NULL);
 
 	palSetPadMode(BREAKS_RELEASED_PORT, BREAKS_RELEASED_PIN, PAL_MODE_INPUT_PULLUP);
 
@@ -113,11 +111,16 @@ void app_custom_start(void) {
 		"toggle focan app terminal output",
 		NULL,
 		terminalCallback);
+
+	chThdCreateStatic(focan_protocol_thread_wa, sizeof(focan_protocol_thread_wa),
+			NORMALPRIO, focan_protocol_thread, NULL);
 }
 
 // Called when the custom application is stopped. Stop our threads
 // and release callbacks.
 void app_custom_stop(void) {
+	stop_now = TRUE;
+
 	palSetPadMode(BREAKS_RELEASED_PORT, BREAKS_RELEASED_PIN, PAL_MODE_INPUT_ANALOG);
 
 	sdStop(RxSerialPortDriver);
@@ -126,7 +129,6 @@ void app_custom_stop(void) {
 	palSetPadMode(RxGpioPort, RxGpioPin, PAL_MODE_INPUT_PULLUP);
 	terminal_unregister_callback(terminalCallback);
 
-	stop_now = TRUE;
 	while (is_running) {
 		chThdSleepMilliseconds(1);
 	}
