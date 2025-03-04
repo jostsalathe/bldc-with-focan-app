@@ -50,6 +50,7 @@ static void interpreteRxData(void);
 static void checkBreaksReleased(void);
 static bool crcValid(void);
 static void sendResponse(void);
+static void logInitOnce(void);
 static void logSendField(int fieldIndex, float fieldValue);
 static void logMcData(void);
 static void setErpmLimited(bool limited);
@@ -61,6 +62,7 @@ static volatile bool is_running = FALSE;
 static volatile bool enablePrintf = FALSE;
 #define MSG_TIMEOUT_MS 1100
 static volatile systime_t timeLastValidMessage;
+static volatile systime_t timeAppStart;
 
 
 #define BREAKS_RELEASED_PORT	HW_ADC_EXT_GPIO
@@ -96,6 +98,14 @@ enum {
 	LOG_N_FIELDS
 };
 #define LOG_N_FIELDS_MC LOG_INDEX_THROTTLE
+#define LOG_DELAY_MS_CONFIG 800
+#define LOG_DELAY_MS_DONE LOG_DELAY_MS_CONFIG + 200
+enum {
+	LOG_UNINIT,
+	LOG_INIT_CONFIG,
+	LOG_INIT_DONE
+};
+static volatile int logInitialized;
 
 
 static SerialConfig uart_cfg = {
@@ -127,24 +137,7 @@ void app_custom_start(void) {
 	stop_now = FALSE;
 	RxIndex = 0;
 	breaksReleased = FALSE;
-
-	log_config_field(LOG_CAN_ID, LOG_INDEX_V_BAT, "v_bat", "Battery Voltage", "V", 3, FALSE, FALSE);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_I_BAT, "i_bat", "Battery Current", "A", 3, FALSE, FALSE);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_I_MOT, "i_mot", "Motor Current", "A", 3, FALSE, FALSE);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_WH, "cnt_wh", "Energy Consumed", "Wh", 3, FALSE, FALSE);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_WH_CHG, "cnt_wh_chg", "Energy Charged", "Wh", 3, FALSE, FALSE);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_AH, "cnt_ah", "Amphours Consumed", "Ah", 3, FALSE, FALSE);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_AH_CHG, "cnt_ah_chg", "Amphours Charged", "Ah", 3, FALSE, FALSE);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_DUTY, "duty", "Duty Cycle", "", 3, FALSE, FALSE);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_SPEED, "spd", "Speed", "km/h", 2, FALSE, FALSE);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_TRIP, "trip_vesc", "Trip", "m", 1, FALSE, FALSE);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_TRIP_ABS, "trip_vesc_abs", "Trip Absolute", "m", 1, FALSE, FALSE);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_TEMP_FET, "tmp", "MOSFET Temperature", "°C", 2, FALSE, FALSE);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_FAULT, "fault", "Fault Code", "", 3, FALSE, FALSE);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_THROTTLE, "thr", "Throttle", "", 3, FALSE, FALSE);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_BREAKING, "br", "Break Indicator", "", 0, FALSE, FALSE);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_SPEED_LIMIT, "spd_lim", "Speed Limit", "km/h", 1, FALSE, FALSE);
-	log_start(LOG_CAN_ID, LOG_N_FIELDS, 10.0f, TRUE, FALSE, FALSE); //TODO as soon as GPS works: TRUE, TRUE);
+	logInitialized = LOG_UNINIT;
 
 	palSetPadMode(BREAKS_RELEASED_PORT, BREAKS_RELEASED_PIN, PAL_MODE_INPUT_PULLUP);
 
@@ -175,10 +168,14 @@ void app_custom_stop(void) {
 	palSetPadMode(TxGpioPort, TxGpioPin, PAL_MODE_INPUT_PULLUP);
 	palSetPadMode(RxGpioPort, RxGpioPin, PAL_MODE_INPUT_PULLUP);
 	terminal_unregister_callback(terminalCallback);
-	log_stop(LOG_CAN_ID);
 
 	while (is_running) {
 		chThdSleepMilliseconds(1);
+	}
+
+	if (logInitialized != LOG_UNINIT) {
+		log_stop(LOG_CAN_ID);
+		logInitialized = LOG_UNINIT;
 	}
 }
 
@@ -195,6 +192,7 @@ static THD_FUNCTION(focan_protocol_thread, arg) {
 	chEvtRegisterMaskWithFlags(&(RxSerialPortDriver->event), &el, EVENT_MASK(0), CHN_INPUT_AVAILABLE);
 
 	timeLastValidMessage = chVTGetSystemTime();
+	timeAppStart = chVTGetSystemTime();
 
 	setErpmLimited(FALSE);
 	setErpmLimited(TRUE);
@@ -213,6 +211,7 @@ static THD_FUNCTION(focan_protocol_thread, arg) {
 
 		// Run your logic here. A lot of functionality is available in mc_interface.h.
 		checkMsgTimeout();
+		logInitOnce();
 
 		logMcData();
 
@@ -393,28 +392,64 @@ void sendResponse(void) {
 	sdWrite(TxSerialPortDriver, TxBuffer, TX_BUFFER_SIZE);
 }
 
+static void logInitOnce(void) {
+	if (logInitialized == LOG_UNINIT && chVTTimeElapsedSinceX(timeAppStart) > MS2ST(LOG_DELAY_MS_CONFIG)) {
+		log_config_field(LOG_CAN_ID, LOG_INDEX_V_BAT, "v_bat", "Battery Voltage", "V", 3, FALSE, FALSE);
+		log_config_field(LOG_CAN_ID, LOG_INDEX_I_BAT, "i_bat", "Battery Current", "A", 3, FALSE, FALSE);
+		log_config_field(LOG_CAN_ID, LOG_INDEX_I_MOT, "i_mot", "Motor Current", "A", 3, FALSE, FALSE);
+		log_config_field(LOG_CAN_ID, LOG_INDEX_WH, "cnt_wh", "Energy Consumed", "Wh", 3, FALSE, FALSE);
+		log_config_field(LOG_CAN_ID, LOG_INDEX_WH_CHG, "cnt_wh_chg", "Energy Charged", "Wh", 3, FALSE, FALSE);
+		log_config_field(LOG_CAN_ID, LOG_INDEX_AH, "cnt_ah", "Amphours Consumed", "Ah", 3, FALSE, FALSE);
+		log_config_field(LOG_CAN_ID, LOG_INDEX_AH_CHG, "cnt_ah_chg", "Amphours Charged", "Ah", 3, FALSE, FALSE);
+		log_config_field(LOG_CAN_ID, LOG_INDEX_DUTY, "duty", "Duty Cycle", "", 3, FALSE, FALSE);
+		log_config_field(LOG_CAN_ID, LOG_INDEX_SPEED, "spd", "Speed", "km/h", 2, FALSE, FALSE);
+		log_config_field(LOG_CAN_ID, LOG_INDEX_TRIP, "trip_vesc", "Trip", "m", 1, FALSE, FALSE);
+		log_config_field(LOG_CAN_ID, LOG_INDEX_TRIP_ABS, "trip_vesc_abs", "Trip Absolute", "m", 1, FALSE, FALSE);
+		log_config_field(LOG_CAN_ID, LOG_INDEX_TEMP_FET, "tmp", "MOSFET Temperature", "°C", 2, FALSE, FALSE);
+		log_config_field(LOG_CAN_ID, LOG_INDEX_FAULT, "fault", "Fault Code", "", 3, FALSE, FALSE);
+		log_config_field(LOG_CAN_ID, LOG_INDEX_THROTTLE, "thr", "Throttle", "", 3, FALSE, FALSE);
+		log_config_field(LOG_CAN_ID, LOG_INDEX_BREAKING, "br", "Break Indicator", "", 0, FALSE, FALSE);
+		log_config_field(LOG_CAN_ID, LOG_INDEX_SPEED_LIMIT, "spd_lim", "Speed Limit", "km/h", 1, FALSE, FALSE);
+
+		log_start(LOG_CAN_ID, LOG_N_FIELDS, 10.0f, TRUE, FALSE, FALSE); //TODO as soon as GPS works: TRUE, TRUE);
+
+		logSendField(LOG_INDEX_SPEED_LIMIT, 0.0f);
+
+		logInitialized = LOG_INIT_CONFIG;
+	} else if (logInitialized == LOG_INIT_CONFIG && chVTTimeElapsedSinceX(timeAppStart) > MS2ST(LOG_DELAY_MS_DONE)) {
+		logSendField(LOG_INDEX_SPEED_LIMIT, KMH_LIMITED);
+
+		logInitialized = LOG_INIT_DONE;
+	}
+
+}
+
 static void logSendField(int fieldIndex, float fieldValue) {
-	log_send_samples_f32(LOG_CAN_ID, fieldIndex, &fieldValue, 1);
+	if (logInitialized) {
+		log_send_samples_f32(LOG_CAN_ID, fieldIndex, &fieldValue, 1);
+	}
 }
 
 static void logMcData(void) {
-	float samples[LOG_N_FIELDS_MC] = {0.0f};
+	if (logInitialized) {
+		float samples[LOG_N_FIELDS_MC] = {0.0f};
 
-	samples[LOG_INDEX_V_BAT]	= mc_interface_get_input_voltage_filtered();
-	samples[LOG_INDEX_I_BAT]	= mc_interface_get_tot_current_in_filtered();
-	samples[LOG_INDEX_I_MOT]	= mc_interface_get_tot_current_filtered();
-	samples[LOG_INDEX_WH]		= mc_interface_get_watt_hours(FALSE);
-	samples[LOG_INDEX_WH_CHG]	= mc_interface_get_watt_hours_charged(FALSE);
-	samples[LOG_INDEX_AH]		= mc_interface_get_amp_hours(FALSE);
-	samples[LOG_INDEX_AH_CHG]	= mc_interface_get_amp_hours_charged(FALSE);
-	samples[LOG_INDEX_DUTY]		= mc_interface_get_duty_cycle_now();
-	samples[LOG_INDEX_SPEED]	= mc_interface_get_speed() * 3.6f;
-	samples[LOG_INDEX_TRIP]		= mc_interface_get_distance();
-	samples[LOG_INDEX_TRIP_ABS]	= mc_interface_get_distance();
-	samples[LOG_INDEX_TEMP_FET]	= mc_interface_temp_fet_filtered();
-	samples[LOG_INDEX_FAULT]	= mc_interface_get_fault();
+		samples[LOG_INDEX_V_BAT]	= mc_interface_get_input_voltage_filtered();
+		samples[LOG_INDEX_I_BAT]	= mc_interface_get_tot_current_in_filtered();
+		samples[LOG_INDEX_I_MOT]	= mc_interface_get_tot_current_filtered();
+		samples[LOG_INDEX_WH]		= mc_interface_get_watt_hours(FALSE);
+		samples[LOG_INDEX_WH_CHG]	= mc_interface_get_watt_hours_charged(FALSE);
+		samples[LOG_INDEX_AH]		= mc_interface_get_amp_hours(FALSE);
+		samples[LOG_INDEX_AH_CHG]	= mc_interface_get_amp_hours_charged(FALSE);
+		samples[LOG_INDEX_DUTY]		= mc_interface_get_duty_cycle_now();
+		samples[LOG_INDEX_SPEED]	= mc_interface_get_speed() * 3.6f;
+		samples[LOG_INDEX_TRIP]		= mc_interface_get_distance();
+		samples[LOG_INDEX_TRIP_ABS]	= mc_interface_get_distance();
+		samples[LOG_INDEX_TEMP_FET]	= mc_interface_temp_fet_filtered();
+		samples[LOG_INDEX_FAULT]	= mc_interface_get_fault();
 
-	log_send_samples_f32(LOG_CAN_ID, 0, samples, LOG_N_FIELDS_MC);
+		log_send_samples_f32(LOG_CAN_ID, 0, samples, LOG_N_FIELDS_MC);
+	}
 }
 
 static void setErpmLimited(bool limited) {
