@@ -49,7 +49,7 @@ static void interpreteRxData(void);
 static void checkBreaksReleased(void);
 static bool crcValid(void);
 static void sendResponse(void);
-static void setErpmLimited(bool limited); // TODO
+static void setErpmLimited(bool limited);
 
 
 // Private variables
@@ -64,8 +64,9 @@ static volatile systime_t timeLastValidMessage;
 #define BREAKS_RELEASED_PIN		HW_ADC_EXT_PIN
 static volatile bool breaksReleased;
 
-#define ERPM_LIMITED	7033.0	// 22 km/h
-#define ERPM_FREE		13427.0	// 42 km/h
+#define KMH_LIMITED		22
+#define KMH_FREE		42
+#define KMH_TO_ERPM(KMH) KMH * 319.69f
 
 
 static SerialConfig uart_cfg = {
@@ -345,7 +346,7 @@ static void setErpmLimited(bool limited) {
 	static bool currentlyLimited = true;
 	if (limited != currentlyLimited) {
 		// only use "unlimited" ERPM limit if the brake is engaged while switching the "light" on
-		float newErpm = limited || breaksReleased ? ERPM_LIMITED : ERPM_FREE;
+		float newErpm = limited || breaksReleased ? KMH_TO_ERPM(KMH_LIMITED) : KMH_TO_ERPM(KMH_FREE);
 
 		// TODO see comm/commands.c > commands_process_packet() case COMM_SET_MCCONF
 		mc_configuration *mcconf = mempools_alloc_mcconf();
