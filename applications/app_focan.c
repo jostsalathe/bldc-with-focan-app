@@ -23,6 +23,7 @@
 
 // Some useful includes
 #include "mc_interface.h"
+#include "log.h"
 #include "mempools.h"
 #include "utils_math.h"
 #include "terminal.h"
@@ -49,6 +50,8 @@ static void interpreteRxData(void);
 static void checkBreaksReleased(void);
 static bool crcValid(void);
 static void sendResponse(void);
+static void logSendField(int fieldIndex, float fieldValue);
+static void logMcData(void);
 static void setErpmLimited(bool limited);
 
 
@@ -67,6 +70,28 @@ static volatile bool breaksReleased;
 #define KMH_LIMITED		22
 #define KMH_FREE		42
 #define KMH_TO_ERPM(KMH) KMH * 319.69f
+
+
+#define LOG_CAN_ID 2
+enum {
+	// items that get regular updates first for easy indexing
+	LOG_INDEX_V_BAT,		// [V]
+	LOG_INDEX_I_BAT,		// [A]
+	LOG_INDEX_I_MOT,		// [A]
+	LOG_INDEX_E,			// [Wh]
+	LOG_INDEX_E_CHG,		// [Wh]
+	LOG_INDEX_DUTY,			// []
+	LOG_INDEX_SPEED,		// [km/h]
+	LOG_INDEX_TRIP,			// [km]
+	LOG_INDEX_TEMP_FET,		// [°C]
+	LOG_INDEX_FAULT,		// []
+	// items after this get updated on change
+	LOG_INDEX_THROTTLE,		// []
+	LOG_INDEX_BREAKING,		// []
+	LOG_INDEX_SPEED_LIMIT,	// [km/h]
+	LOG_N_FIELDS
+};
+#define LOG_N_FIELDS_MC LOG_INDEX_THROTTLE
 
 
 static SerialConfig uart_cfg = {
@@ -99,6 +124,20 @@ void app_custom_start(void) {
 	RxIndex = 0;
 	breaksReleased = FALSE;
 
+	log_config_field(LOG_CAN_ID, LOG_INDEX_V_BAT, "v_bat", "Battery Voltage", "V", 3, false, false);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_I_BAT, "i_bat", "Battery Current", "A", 3, false, false);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_I_MOT, "i_mot", "Motor Current", "A", 3, false, false);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_E, "e", "Energy Consumed", "Wh", 3, false, false);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_E_CHG, "e_chg", "Energy Charged", "Wh", 3, false, false);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_DUTY, "duty", "Duty Cycle", "", 3, false, false);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_SPEED, "spd", "Speed", "km/h", 3, false, false);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_TRIP, "trip", "Trip Distance", "km", 3, false, false);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_TEMP_FET, "tmp", "MOSFET Temperature", "°C", 2, false, false);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_FAULT, "flt", "Fault Code", "", 3, false, false);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_THROTTLE, "thr", "Throttle", "", 3, false, false);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_BREAKING, "br", "Break Indicator", "", 0, false, false);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_SPEED_LIMIT, "spd_lim", "Speed Limit", "km/h", 1, false, false);
+	log_start(LOG_CAN_ID, LOG_N_FIELDS, 10.0f, true, false, false); //TODO as soon as GPS works: true, true);
 
 	palSetPadMode(BREAKS_RELEASED_PORT, BREAKS_RELEASED_PIN, PAL_MODE_INPUT_PULLUP);
 
@@ -129,6 +168,7 @@ void app_custom_stop(void) {
 	palSetPadMode(TxGpioPort, TxGpioPin, PAL_MODE_INPUT_PULLUP);
 	palSetPadMode(RxGpioPort, RxGpioPin, PAL_MODE_INPUT_PULLUP);
 	terminal_unregister_callback(terminalCallback);
+	log_stop(LOG_CAN_ID);
 
 	while (is_running) {
 		chThdSleepMilliseconds(1);
@@ -167,7 +207,9 @@ static THD_FUNCTION(focan_protocol_thread, arg) {
 		// Run your logic here. A lot of functionality is available in mc_interface.h.
 		checkMsgTimeout();
 
-		chEvtWaitAnyTimeout(ALL_EVENTS, 100);
+		logMcData();
+
+		chEvtWaitAnyTimeout(ALL_EVENTS, 10);
 		bool rx = TRUE;
 		while (rx) {
 			msg_t res = sdGetTimeout(RxSerialPortDriver, TIME_IMMEDIATE);
@@ -214,6 +256,7 @@ static void checkMsgTimeout(void) {
 	if (chVTTimeElapsedSinceX(timeLastValidMessage) > MS2ST(MSG_TIMEOUT_MS)) {
 		// shut off motor
 		mc_interface_set_current_rel(0.0f);
+		logSendField(LOG_INDEX_THROTTLE, -0.0f);
 
 		// reset timeout
 		timeLastValidMessage = chVTGetSystemTime();
@@ -244,6 +287,7 @@ void interpreteRxData(void) {
 	commands_printf("%6d %1d %04d", ST2MS(chVTGetSystemTime()), breaksReleased, speedLever);
 
 	float throttle = speedLever >= 400 ? (speedLever - 400) / 600.0f : 0.0f;
+	logSendField(LOG_INDEX_THROTTLE, throttle);
 	if (breaksReleased && throttle > 0.0f) {
 		mc_interface_set_current_rel(throttle);
 	} else {
@@ -262,6 +306,7 @@ void checkBreaksReleased(void) {
 	if (padReadsReleased == padReadReleasedLastTime) {
 		//&& padReadReleasedLastTime == padReadReleasedLastLastTime) {
 		breaksReleased = padReadsReleased;
+		logSendField(LOG_INDEX_BREAKING, breaksReleased ? 0.0f : 1.0f);
 	}
 
 	if (enablePrintf)
@@ -341,6 +386,27 @@ void sendResponse(void) {
 	sdWrite(TxSerialPortDriver, TxBuffer, TX_BUFFER_SIZE);
 }
 
+static void logSendField(int fieldIndex, float fieldValue) {
+	log_send_samples_f32(LOG_CAN_ID, fieldIndex, &fieldValue, 1);
+}
+
+static void logMcData(void) {
+	float samples[LOG_N_FIELDS_MC] = {0.0f};
+
+	samples[LOG_INDEX_V_BAT]	= mc_interface_get_input_voltage_filtered();
+	samples[LOG_INDEX_I_BAT]	= mc_interface_get_tot_current_in_filtered();
+	samples[LOG_INDEX_I_MOT]	= mc_interface_get_tot_current_filtered();
+	samples[LOG_INDEX_E]		= mc_interface_get_watt_hours(false);
+	samples[LOG_INDEX_E_CHG]	= mc_interface_get_watt_hours_charged(false);
+	samples[LOG_INDEX_DUTY]		= mc_interface_get_duty_cycle_now();
+	samples[LOG_INDEX_SPEED]	= mc_interface_get_speed() * 3.6f;
+	samples[LOG_INDEX_TRIP]		= mc_interface_get_distance() / 1000.0f;
+	samples[LOG_INDEX_TEMP_FET]	= mc_interface_temp_fet_filtered();
+	samples[LOG_INDEX_FAULT]	= mc_interface_get_fault();
+
+	log_send_samples_f32(LOG_CAN_ID, 0, samples, LOG_N_FIELDS_MC);
+}
+
 static void setErpmLimited(bool limited) {
 	static bool currentlyLimited = true;
 	if (limited != currentlyLimited) {
@@ -355,6 +421,8 @@ static void setErpmLimited(bool limited) {
 
 		commands_apply_mcconf_hw_limits(mcconf);
 		mc_interface_set_configuration(mcconf);
+
+		logSendField(LOG_INDEX_SPEED_LIMIT, newMaxSpeed);
 
 		if (enablePrintf)
 		commands_printf("Updated speed limit to %4.1f (%slimited)", (double) newMaxSpeed, limited ? "" : "un");
