@@ -173,7 +173,6 @@ static THD_FUNCTION(focan_protocol_thread, arg) {
 			msg_t res = sdGetTimeout(RxSerialPortDriver, TIME_IMMEDIATE);
 			if (res != MSG_TIMEOUT) {
 				processByte(res);
-				rx = TRUE;
 			} else {
 				rx = FALSE;
 			}
@@ -214,7 +213,7 @@ void processByte(uint8_t data) {
 static void checkMsgTimeout(void) {
 	if (chVTTimeElapsedSinceX(timeLastValidMessage) > MS2ST(MSG_TIMEOUT_MS)) {
 		// shut off motor
-		mc_interface_set_current_rel(0.0);
+		mc_interface_set_current_rel(0.0f);
 
 		// reset timeout
 		timeLastValidMessage = chVTGetSystemTime();
@@ -244,8 +243,8 @@ void interpreteRxData(void) {
 	if (enablePrintf)
 	commands_printf("%6d %1d %04d", ST2MS(chVTGetSystemTime()), breaksReleased, speedLever);
 
-	float throttle = speedLever >= 400 ? (speedLever - 400) / 600.0 : 0.0;
-	if (breaksReleased && throttle > 0.0) {
+	float throttle = speedLever >= 400 ? (speedLever - 400) / 600.0f : 0.0f;
+	if (breaksReleased && throttle > 0.0f) {
 		mc_interface_set_current_rel(throttle);
 	} else {
 		mc_interface_set_brake_current_rel(throttle);
@@ -310,8 +309,8 @@ bool crcValid(void) {
 }
 
 void sendResponse(void) {
-	float rpm = mc_interface_get_rpm()/15; // divided by motor pole pairs
-	uint16_t msPerRev = rpm <= 2.0 ? 31456 : 60000.0/rpm;
+	float rpm = mc_interface_get_rpm() / 15; // divided by motor pole pairs
+	uint16_t msPerRev = rpm <= 2.0f ? 31456 : 60000.0f/rpm;
 
 	TxBuffer[0] = 2;
 	TxBuffer[1] = 14;
@@ -346,22 +345,23 @@ static void setErpmLimited(bool limited) {
 	static bool currentlyLimited = true;
 	if (limited != currentlyLimited) {
 		// only use "unlimited" ERPM limit if the brake is engaged while switching the "light" on
-		float newErpm = limited || breaksReleased ? KMH_TO_ERPM(KMH_LIMITED) : KMH_TO_ERPM(KMH_FREE);
+		float newMaxSpeed = limited || breaksReleased ? KMH_LIMITED : KMH_FREE;
 
 		// TODO see comm/commands.c > commands_process_packet() case COMM_SET_MCCONF
 		mc_configuration *mcconf = mempools_alloc_mcconf();
 		*mcconf = *mc_interface_get_configuration();
 
-		mcconf->l_max_erpm = newErpm;
+		mcconf->l_max_erpm = KMH_TO_ERPM(newMaxSpeed);
 
 		commands_apply_mcconf_hw_limits(mcconf);
 		mc_interface_set_configuration(mcconf);
 
 		if (enablePrintf)
-		commands_printf("Updated ERPM to %d (%slimited) (TODO not actually)", (int32_t) newErpm, limited ? "" : "un");
+		commands_printf("Updated speed limit to %4.1f (%slimited)", (double) newMaxSpeed, limited ? "" : "un");
+
+		currentlyLimited = limited;
 
 		mempools_free_mcconf(mcconf);
-		currentlyLimited = limited;
 	}
 }
 
