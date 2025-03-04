@@ -67,8 +67,9 @@ static volatile systime_t timeLastValidMessage;
 #define BREAKS_RELEASED_PIN		HW_ADC_EXT_PIN
 static volatile bool breaksReleased;
 
-#define KMH_LIMITED		22
-#define KMH_FREE		42
+#define KMH_MIN			03.0f
+#define KMH_LIMITED		22.0f
+#define KMH_FREE		42.0f
 #define KMH_TO_ERPM(KMH) KMH * 319.69f
 
 
@@ -288,7 +289,7 @@ void interpreteRxData(void) {
 
 	float throttle = speedLever >= 400 ? (speedLever - 400) / 600.0f : 0.0f;
 	logSendField(LOG_INDEX_THROTTLE, throttle);
-	if (breaksReleased && throttle > 0.0f) {
+	if (breaksReleased && throttle > 0.0f && mc_interface_get_speed() * 3.6f > KMH_MIN) {
 		mc_interface_set_current_rel(throttle);
 	} else {
 		mc_interface_set_brake_current_rel(throttle);
