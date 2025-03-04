@@ -128,23 +128,23 @@ void app_custom_start(void) {
 	RxIndex = 0;
 	breaksReleased = FALSE;
 
-	log_config_field(LOG_CAN_ID, LOG_INDEX_V_BAT, "v_bat", "Battery Voltage", "V", 3, false, false);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_I_BAT, "i_bat", "Battery Current", "A", 3, false, false);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_I_MOT, "i_mot", "Motor Current", "A", 3, false, false);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_WH, "cnt_wh", "Energy Consumed", "Wh", 3, false, false);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_WH_CHG, "cnt_wh_chg", "Energy Charged", "Wh", 3, false, false);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_AH, "cnt_ah", "Amphours Consumed", "Ah", 3, false, false);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_AH_CHG, "cnt_ah_chg", "Amphours Charged", "Ah", 3, false, false);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_DUTY, "duty", "Duty Cycle", "", 3, false, false);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_SPEED, "spd", "Speed", "km/h", 2, false, false);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_TRIP, "trip_vesc", "Trip", "m", 1, false, false);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_TRIP_ABS, "trip_vesc_abs", "Trip Absolute", "m", 1, false, false);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_TEMP_FET, "tmp", "MOSFET Temperature", "°C", 2, false, false);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_FAULT, "fault", "Fault Code", "", 3, false, false);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_THROTTLE, "thr", "Throttle", "", 3, false, false);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_BREAKING, "br", "Break Indicator", "", 0, false, false);
-	log_config_field(LOG_CAN_ID, LOG_INDEX_SPEED_LIMIT, "spd_lim", "Speed Limit", "km/h", 1, false, false);
-	log_start(LOG_CAN_ID, LOG_N_FIELDS, 10.0f, true, false, false); //TODO as soon as GPS works: true, true);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_V_BAT, "v_bat", "Battery Voltage", "V", 3, FALSE, FALSE);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_I_BAT, "i_bat", "Battery Current", "A", 3, FALSE, FALSE);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_I_MOT, "i_mot", "Motor Current", "A", 3, FALSE, FALSE);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_WH, "cnt_wh", "Energy Consumed", "Wh", 3, FALSE, FALSE);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_WH_CHG, "cnt_wh_chg", "Energy Charged", "Wh", 3, FALSE, FALSE);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_AH, "cnt_ah", "Amphours Consumed", "Ah", 3, FALSE, FALSE);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_AH_CHG, "cnt_ah_chg", "Amphours Charged", "Ah", 3, FALSE, FALSE);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_DUTY, "duty", "Duty Cycle", "", 3, FALSE, FALSE);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_SPEED, "spd", "Speed", "km/h", 2, FALSE, FALSE);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_TRIP, "trip_vesc", "Trip", "m", 1, FALSE, FALSE);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_TRIP_ABS, "trip_vesc_abs", "Trip Absolute", "m", 1, FALSE, FALSE);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_TEMP_FET, "tmp", "MOSFET Temperature", "°C", 2, FALSE, FALSE);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_FAULT, "fault", "Fault Code", "", 3, FALSE, FALSE);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_THROTTLE, "thr", "Throttle", "", 3, FALSE, FALSE);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_BREAKING, "br", "Break Indicator", "", 0, FALSE, FALSE);
+	log_config_field(LOG_CAN_ID, LOG_INDEX_SPEED_LIMIT, "spd_lim", "Speed Limit", "km/h", 1, FALSE, FALSE);
+	log_start(LOG_CAN_ID, LOG_N_FIELDS, 10.0f, TRUE, FALSE, FALSE); //TODO as soon as GPS works: TRUE, TRUE);
 
 	palSetPadMode(BREAKS_RELEASED_PORT, BREAKS_RELEASED_PIN, PAL_MODE_INPUT_PULLUP);
 
@@ -403,10 +403,10 @@ static void logMcData(void) {
 	samples[LOG_INDEX_V_BAT]	= mc_interface_get_input_voltage_filtered();
 	samples[LOG_INDEX_I_BAT]	= mc_interface_get_tot_current_in_filtered();
 	samples[LOG_INDEX_I_MOT]	= mc_interface_get_tot_current_filtered();
-	samples[LOG_INDEX_WH]		= mc_interface_get_watt_hours(false);
-	samples[LOG_INDEX_WH_CHG]	= mc_interface_get_watt_hours_charged(false);
-	samples[LOG_INDEX_AH]		= mc_interface_get_amp_hours(false);
-	samples[LOG_INDEX_AH_CHG]	= mc_interface_get_amp_hours_charged(false);
+	samples[LOG_INDEX_WH]		= mc_interface_get_watt_hours(FALSE);
+	samples[LOG_INDEX_WH_CHG]	= mc_interface_get_watt_hours_charged(FALSE);
+	samples[LOG_INDEX_AH]		= mc_interface_get_amp_hours(FALSE);
+	samples[LOG_INDEX_AH_CHG]	= mc_interface_get_amp_hours_charged(FALSE);
 	samples[LOG_INDEX_DUTY]		= mc_interface_get_duty_cycle_now();
 	samples[LOG_INDEX_SPEED]	= mc_interface_get_speed() * 3.6f;
 	samples[LOG_INDEX_TRIP]		= mc_interface_get_distance();
@@ -418,7 +418,7 @@ static void logMcData(void) {
 }
 
 static void setErpmLimited(bool limited) {
-	static bool currentlyLimited = true;
+	static bool currentlyLimited = TRUE;
 	if (limited != currentlyLimited) {
 		// only use "unlimited" ERPM limit if the brake is engaged while switching the "light" on
 		float newMaxSpeed = limited || breaksReleased ? KMH_LIMITED : KMH_FREE;
