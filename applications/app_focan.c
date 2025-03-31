@@ -421,7 +421,7 @@ static void logStateHandling(void) {
 			log_config_field(LOG_CAN_ID, LOG_INDEX_BREAKING, "br", "Break Indicator", "", 0, FALSE, FALSE);
 			log_config_field(LOG_CAN_ID, LOG_INDEX_SPEED_LIMIT, "spd_lim", "Speed Limit", "km/h", 1, FALSE, FALSE);
 			
-			log_start(LOG_CAN_ID, LOG_N_FIELDS, 10.0f, TRUE, FALSE, FALSE); //TODO as soon as GPS works: TRUE, TRUE);
+			log_start(LOG_CAN_ID, LOG_N_FIELDS, 10.0f, TRUE, TRUE, TRUE);
 			
 			timeLogStarted = chVTGetSystemTime();
 			logState = LOG_POST_INIT;
