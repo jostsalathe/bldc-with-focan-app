@@ -74,7 +74,7 @@ static volatile bool breaksReleased = FALSE;
 #define KMH_FREE		32.0f
 
 static volatile int nPolePairs = 15;
-static volatile float wheelDiameterM = 246.0f;
+static volatile float wheelDiameterMM = 241.3f;
 
 
 #define LOG_CAN_ID 2
@@ -367,7 +367,7 @@ void sendResponse(void) {
 	float rpm = mc_interface_get_rpm() / nPolePairs;
 	// original GZ-3 has 10" wheel diameter configured,
 	// this needs to be compensated for the correct speed to be displayed and odometered
-	rpm = rpm * wheelDiameterM / 0.254f;
+	rpm = rpm * wheelDiameterMM / 0.254f;
 	uint16_t msPerRev = rpm <= 2.0f ? 31456 : 60000.0f / rpm;
 
 	TxBuffer[0] = 2;
@@ -471,9 +471,9 @@ static void setErpmLimited(bool limited) {
 		*mcconf = *mc_interface_get_configuration();
 
 		nPolePairs = mcconf->si_motor_poles / 2;
-		wheelDiameterM = mcconf->si_wheel_diameter;
+		wheelDiameterMM = mcconf->si_wheel_diameter;
 	
-		float wheelCircumferenceM = wheelDiameterM * 3.1415f;
+		float wheelCircumferenceM = wheelDiameterMM * 3.1415f;
 
 		mcconf->l_max_erpm = newMaxSpeed * 1000.0f / 60.0f / wheelCircumferenceM * nPolePairs;
 
