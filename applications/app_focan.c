@@ -71,7 +71,7 @@ static volatile bool breaksReleased = FALSE;
 
 #define KMH_MIN			02.0f
 #define KMH_LIMITED		22.0f
-#define KMH_FREE		32.0f
+#define KMH_FREE		42.0f
 
 static volatile int nPolePairs = 15;
 static volatile float wheelDiameterMM = 241.3f;
